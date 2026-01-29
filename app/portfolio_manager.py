@@ -218,6 +218,25 @@ class Holding:
     fifty_two_week_high: Optional[float]
     fifty_two_week_low: Optional[float]
     purchase_date: Optional[datetime] = None
+    notes: Optional[str] = None
+
+
+@dataclass
+class WatchlistItem:
+    """A stock on the watchlist."""
+    symbol: str
+    name: str
+    asset_type: str
+    current_price: float
+    target_price: Optional[float]
+    notes: Optional[str]
+    added_date: datetime
+    price_at_add: float
+    change_since_add: float
+    change_since_add_pct: float
+    dividend_yield: float
+    fifty_two_week_high: Optional[float]
+    fifty_two_week_low: Optional[float]
 
 
 def classify_asset_type(info: dict) -> str:
@@ -300,7 +319,59 @@ def fetch_security_data(symbol: str) -> Optional[Dict]:
         return None
 
 
-def create_holding(symbol: str, shares: float, avg_cost: float, purchase_date: Optional[datetime] = None) -> Optional[Holding]:
+def create_watchlist_item(symbol: str, target_price: Optional[float] = None, notes: Optional[str] = None) -> Optional[WatchlistItem]:
+    """Create a WatchlistItem with live data."""
+    data = fetch_security_data(symbol)
+    if data is None:
+        return None
+
+    added_date = datetime.now()
+    price_at_add = data["current_price"]
+
+    return WatchlistItem(
+        symbol=data["symbol"],
+        name=data["name"],
+        asset_type=data["asset_type"],
+        current_price=data["current_price"],
+        target_price=target_price,
+        notes=notes,
+        added_date=added_date,
+        price_at_add=price_at_add,
+        change_since_add=0,
+        change_since_add_pct=0,
+        dividend_yield=data["dividend_yield"],
+        fifty_two_week_high=data["fifty_two_week_high"],
+        fifty_two_week_low=data["fifty_two_week_low"],
+    )
+
+
+def refresh_watchlist_item(item: WatchlistItem) -> Optional[WatchlistItem]:
+    """Refresh a watchlist item with current prices."""
+    data = fetch_security_data(item.symbol)
+    if data is None:
+        return item
+
+    change = data["current_price"] - item.price_at_add
+    change_pct = (change / item.price_at_add * 100) if item.price_at_add > 0 else 0
+
+    return WatchlistItem(
+        symbol=item.symbol,
+        name=data["name"],
+        asset_type=data["asset_type"],
+        current_price=data["current_price"],
+        target_price=item.target_price,
+        notes=item.notes,
+        added_date=item.added_date,
+        price_at_add=item.price_at_add,
+        change_since_add=change,
+        change_since_add_pct=change_pct,
+        dividend_yield=data["dividend_yield"],
+        fifty_two_week_high=data["fifty_two_week_high"],
+        fifty_two_week_low=data["fifty_two_week_low"],
+    )
+
+
+def create_holding(symbol: str, shares: float, avg_cost: float, purchase_date: Optional[datetime] = None, notes: Optional[str] = None) -> Optional[Holding]:
     """Create a Holding object with live data."""
     data = fetch_security_data(symbol)
     if data is None:
@@ -332,7 +403,276 @@ def create_holding(symbol: str, shares: float, avg_cost: float, purchase_date: O
         fifty_two_week_high=data["fifty_two_week_high"],
         fifty_two_week_low=data["fifty_two_week_low"],
         purchase_date=purchase_date,
+        notes=notes,
     )
+
+
+# ─────────────────────────────────────────────
+# CSV Export/Import Functions
+# ─────────────────────────────────────────────
+
+def export_holdings_to_csv(holdings: List[Holding]) -> str:
+    """Export holdings to CSV string."""
+    if not holdings:
+        return ""
+
+    lines = ["Symbol,Name,Type,Shares,Avg Cost,Purchase Date,Notes"]
+    for h in holdings:
+        date_str = h.purchase_date.strftime("%Y-%m-%d") if h.purchase_date else ""
+        notes_str = h.notes.replace(",", ";").replace("\n", " ") if h.notes else ""
+        lines.append(f"{h.symbol},{h.name},{h.asset_type},{h.shares},{h.avg_cost},{date_str},{notes_str}")
+
+    return "\n".join(lines)
+
+
+def import_holdings_from_csv(csv_content: str) -> List[Dict]:
+    """
+    Parse CSV content and return list of holding dicts.
+    Expected format: Symbol,Name,Type,Shares,Avg Cost,Purchase Date,Notes
+    Or simple format: Symbol,Shares,Cost,Date
+    """
+    holdings = []
+    lines = csv_content.strip().split("\n")
+
+    # Skip header if present
+    start_idx = 0
+    if lines and lines[0].lower().startswith("symbol"):
+        start_idx = 1
+
+    for line in lines[start_idx:]:
+        if not line.strip():
+            continue
+
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 2:
+            continue
+
+        try:
+            symbol = parts[0].upper()
+            # Try to detect format
+            if len(parts) >= 5 and not parts[1].replace(".", "").isdigit():
+                # Full format: Symbol,Name,Type,Shares,Avg Cost,Date,Notes
+                shares = float(parts[3]) if len(parts) > 3 else 0
+                cost = float(parts[4]) if len(parts) > 4 else 0
+                date_str = parts[5] if len(parts) > 5 else ""
+                notes = parts[6] if len(parts) > 6 else ""
+            else:
+                # Simple format: Symbol,Shares,Cost,Date,Notes
+                shares = float(parts[1]) if len(parts) > 1 else 0
+                cost = float(parts[2]) if len(parts) > 2 and parts[2] else 0
+                date_str = parts[3] if len(parts) > 3 else ""
+                notes = parts[4] if len(parts) > 4 else ""
+
+            purchase_date = None
+            if date_str:
+                try:
+                    purchase_date = datetime.strptime(date_str.strip(), "%Y-%m-%d")
+                except ValueError:
+                    pass
+
+            holdings.append({
+                "symbol": symbol,
+                "shares": shares,
+                "cost": cost,
+                "purchase_date": purchase_date,
+                "notes": notes,
+            })
+        except (ValueError, IndexError):
+            continue
+
+    return holdings
+
+
+def export_watchlist_to_csv(watchlist: List[WatchlistItem]) -> str:
+    """Export watchlist to CSV string."""
+    if not watchlist:
+        return ""
+
+    lines = ["Symbol,Name,Target Price,Added Date,Price at Add,Notes"]
+    for w in watchlist:
+        date_str = w.added_date.strftime("%Y-%m-%d") if w.added_date else ""
+        target_str = str(w.target_price) if w.target_price else ""
+        notes_str = w.notes.replace(",", ";").replace("\n", " ") if w.notes else ""
+        lines.append(f"{w.symbol},{w.name},{target_str},{date_str},{w.price_at_add},{notes_str}")
+
+    return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────
+# Dividend History Functions
+# ─────────────────────────────────────────────
+
+def get_dividend_payment_history(holdings: List[Holding], years: int = 3) -> pd.DataFrame:
+    """
+    Get actual dividend payment history for all holdings.
+    Returns DataFrame with date, symbol, amount, shares, total received.
+    """
+    all_dividends = []
+
+    cutoff = datetime.now() - timedelta(days=years * 365)
+
+    for h in holdings:
+        try:
+            ticker = yf.Ticker(h.symbol)
+            dividends = ticker.dividends
+
+            if dividends.empty:
+                continue
+
+            for date, amount in dividends.items():
+                div_date = pd.to_datetime(date).to_pydatetime()
+                if hasattr(div_date, 'tzinfo') and div_date.tzinfo:
+                    div_date = div_date.replace(tzinfo=None)
+
+                if div_date < cutoff:
+                    continue
+
+                # Only count if we owned it (based on purchase date)
+                if h.purchase_date and div_date < h.purchase_date:
+                    continue
+
+                all_dividends.append({
+                    "Date": div_date,
+                    "Symbol": h.symbol,
+                    "Amount": amount,
+                    "Shares": h.shares,
+                    "Total": amount * h.shares,
+                })
+
+        except Exception:
+            continue
+
+    if not all_dividends:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(all_dividends)
+    df = df.sort_values("Date", ascending=False)
+    return df
+
+
+def get_monthly_dividend_totals(holdings: List[Holding], years: int = 2) -> pd.DataFrame:
+    """Get monthly dividend totals for charting."""
+    hist = get_dividend_payment_history(holdings, years)
+
+    if hist.empty:
+        return pd.DataFrame()
+
+    hist["Month"] = hist["Date"].dt.to_period("M")
+    monthly = hist.groupby("Month")["Total"].sum().reset_index()
+    monthly["Month"] = monthly["Month"].astype(str)
+
+    return monthly
+
+
+# ─────────────────────────────────────────────
+# DRIP Calculator Functions
+# ─────────────────────────────────────────────
+
+def calculate_drip_projection(
+    initial_shares: float,
+    share_price: float,
+    dividend_per_share: float,
+    dividend_frequency: int,  # payments per year (4 = quarterly, 12 = monthly)
+    years: int = 10,
+    annual_price_growth: float = 0.05,  # 5% default
+    annual_dividend_growth: float = 0.03,  # 3% default
+) -> pd.DataFrame:
+    """
+    Project dividend reinvestment (DRIP) growth over time.
+    Returns DataFrame with year, shares, value, annual dividends.
+    """
+    results = []
+    shares = initial_shares
+    price = share_price
+    div_per_share = dividend_per_share
+
+    for year in range(years + 1):
+        annual_div = shares * div_per_share * dividend_frequency
+        value = shares * price
+
+        results.append({
+            "Year": year,
+            "Shares": shares,
+            "Share Price": price,
+            "Portfolio Value": value,
+            "Annual Dividends": annual_div,
+            "Yield on Cost": (annual_div / (initial_shares * share_price) * 100) if year > 0 else (div_per_share * dividend_frequency / share_price * 100),
+        })
+
+        if year < years:
+            # Reinvest dividends quarterly/monthly
+            for _ in range(dividend_frequency):
+                div_payment = shares * div_per_share
+                new_shares = div_payment / price
+                shares += new_shares
+
+            # Annual growth
+            price *= (1 + annual_price_growth)
+            div_per_share *= (1 + annual_dividend_growth)
+
+    return pd.DataFrame(results)
+
+
+def calculate_drip_vs_no_drip(
+    initial_investment: float,
+    share_price: float,
+    dividend_yield: float,
+    years: int = 10,
+    annual_price_growth: float = 0.05,
+    annual_dividend_growth: float = 0.03,
+) -> Dict:
+    """
+    Compare DRIP vs no DRIP scenarios.
+    """
+    initial_shares = initial_investment / share_price
+    div_per_share = share_price * dividend_yield / 4  # Quarterly
+
+    # With DRIP
+    drip_df = calculate_drip_projection(
+        initial_shares, share_price, div_per_share, 4, years,
+        annual_price_growth, annual_dividend_growth
+    )
+
+    # Without DRIP
+    no_drip_results = []
+    price = share_price
+    div_per_share_nd = div_per_share
+    total_dividends_received = 0
+
+    for year in range(years + 1):
+        annual_div = initial_shares * div_per_share_nd * 4
+        value = initial_shares * price
+
+        no_drip_results.append({
+            "Year": year,
+            "Shares": initial_shares,
+            "Share Price": price,
+            "Portfolio Value": value,
+            "Annual Dividends": annual_div,
+            "Cumulative Dividends": total_dividends_received,
+        })
+
+        if year < years:
+            total_dividends_received += annual_div
+            price *= (1 + annual_price_growth)
+            div_per_share_nd *= (1 + annual_dividend_growth)
+
+    no_drip_df = pd.DataFrame(no_drip_results)
+
+    # Final comparison
+    final_drip = drip_df.iloc[-1]
+    final_no_drip = no_drip_df.iloc[-1]
+
+    return {
+        "drip": drip_df,
+        "no_drip": no_drip_df,
+        "drip_final_value": final_drip["Portfolio Value"],
+        "no_drip_final_value": final_no_drip["Portfolio Value"] + final_no_drip["Cumulative Dividends"],
+        "drip_final_shares": final_drip["Shares"],
+        "no_drip_final_shares": initial_shares,
+        "drip_advantage": final_drip["Portfolio Value"] - (final_no_drip["Portfolio Value"] + final_no_drip["Cumulative Dividends"]),
+        "drip_advantage_pct": ((final_drip["Portfolio Value"] / (final_no_drip["Portfolio Value"] + final_no_drip["Cumulative Dividends"])) - 1) * 100,
+    }
 
 
 def get_stock_history(symbol: str, period: str = "1y") -> pd.DataFrame:
