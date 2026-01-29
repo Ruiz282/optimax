@@ -42,7 +42,13 @@ from portfolio_manager import (
     POPULAR_BOND_ETFS,
     POPULAR_REITS,
     TICKER_DATABASE,
+    FedEvent,
 )
+
+# Set dark theme for matplotlib charts
+plt.style.use('dark_background')
+CHART_BG_COLOR = '#2E2E2E'
+CHART_FACE_COLOR = '#3A3A3A'
 from dateutil.relativedelta import relativedelta
 import calendar as cal_module
 
@@ -281,85 +287,41 @@ with tab_portfolio:
     # Initialize session state for holdings
     if "holdings" not in st.session_state:
         st.session_state.holdings = []
+    if "editing_holding" not in st.session_state:
+        st.session_state.editing_holding = None
 
-    # ── Add New Holding ──
+    # ── Add New Holdings ──
     st.markdown("### Add Holdings")
 
-    add_col1, add_col2 = st.columns([2, 1])
+    add_method = st.radio(
+        "Add method",
+        ["Single Entry", "Bulk Add (Multiple)", "Quick Add Popular"],
+        horizontal=True,
+        key="add_method",
+    )
 
-    with add_col1:
-        add_method = st.radio(
-            "Add method",
-            ["Enter Symbol", "Quick Add Popular"],
-            horizontal=True,
-            key="add_method",
-        )
+    if add_method == "Single Entry":
+        # Simple single ticker entry without dropdown
+        col1, col2, col3, col4 = st.columns([1.5, 1, 1, 1])
 
-    if add_method == "Enter Symbol":
-        # Initialize search state
-        if "ticker_search" not in st.session_state:
-            st.session_state.ticker_search = ""
-        if "selected_ticker" not in st.session_state:
-            st.session_state.selected_ticker = None
+        with col1:
+            new_symbol = st.text_input(
+                "Ticker Symbol",
+                placeholder="AAPL",
+                key="single_ticker_input",
+                help="Enter ticker symbol (e.g., AAPL, MSFT, SPY)"
+            ).upper().strip()
 
-        # Search input
-        search_col, result_col = st.columns([1, 2])
-
-        with search_col:
-            ticker_input = st.text_input(
-                "Search ticker or company name",
-                placeholder="Type AAPL, Apple, Tesla...",
-                key="ticker_search_input",
-                help="Start typing to see suggestions"
-            ).strip()
-
-        # Show search results
-        with result_col:
-            if ticker_input and len(ticker_input) >= 1:
-                matches = search_tickers(ticker_input, limit=8)
-                if matches:
-                    # Create options for selectbox
-                    options = ["Select a ticker..."] + [
-                        f"{sym} - {name} ({atype})" for sym, name, atype in matches
-                    ]
-                    selected = st.selectbox(
-                        "Matching tickers",
-                        options,
-                        key="ticker_match_select",
-                        label_visibility="collapsed"
-                    )
-                    if selected and selected != "Select a ticker...":
-                        # Extract symbol from selection
-                        st.session_state.selected_ticker = selected.split(" - ")[0]
-                else:
-                    st.caption(f"No matches found for '{ticker_input}'. You can still enter it manually.")
-                    st.session_state.selected_ticker = ticker_input.upper()
-            elif ticker_input:
-                st.session_state.selected_ticker = ticker_input.upper()
-
-        # Get the symbol to use
-        new_symbol = st.session_state.selected_ticker or ticker_input.upper()
-
-        # Show selected ticker info
-        if new_symbol and len(new_symbol) >= 1:
-            # Find in database for display
-            ticker_info = next(
-                ((sym, name, atype) for sym, name, atype in TICKER_DATABASE if sym == new_symbol),
-                None
-            )
-            if ticker_info:
-                st.info(f"**{ticker_info[0]}** - {ticker_info[1]} ({ticker_info[2]})")
-
-        # Shares and cost inputs
-        input_col2, input_col3, input_col4 = st.columns([1, 1, 1])
-        with input_col2:
+        with col2:
             new_shares = st.number_input("Shares", min_value=0.0, value=10.0, step=1.0, key="new_shares")
-        with input_col3:
+
+        with col3:
             new_cost = st.number_input("Avg Cost ($)", min_value=0.0, value=0.0, step=1.0, key="new_cost",
                                         help="Leave at 0 to use current price")
-        with input_col4:
+
+        with col4:
             st.markdown("<br>", unsafe_allow_html=True)
-            add_btn = st.button("Add to Portfolio", type="primary", key="add_btn")
+            add_btn = st.button("Add", type="primary", key="add_btn")
 
         if add_btn and new_symbol:
             with st.spinner(f"Fetching data for {new_symbol}..."):
@@ -368,7 +330,7 @@ with tab_portfolio:
                     cost = new_cost if new_cost > 0 else data["current_price"]
                     holding = create_holding(new_symbol, new_shares, cost)
                     if holding:
-                        # Check if already exists
+                        # Check if already exists - update instead
                         existing_idx = next(
                             (i for i, h in enumerate(st.session_state.holdings) if h.symbol == new_symbol),
                             None
@@ -379,11 +341,88 @@ with tab_portfolio:
                         else:
                             st.session_state.holdings.append(holding)
                             st.success(f"Added {holding.name} ({holding.asset_type}) to portfolio.")
-                        # Clear selection
-                        st.session_state.selected_ticker = None
                         st.rerun()
                 else:
                     st.error(f"Could not find data for {new_symbol}. Please check the symbol.")
+
+    elif add_method == "Bulk Add (Multiple)":
+        # Bulk add multiple tickers at once
+        st.markdown("""
+        **Enter multiple holdings** - one per line in format: `TICKER, SHARES, COST`
+
+        Example:
+        ```
+        AAPL, 50, 175.00
+        MSFT, 30, 380.00
+        SPY, 100
+        VTI, 25, 250.00
+        ```
+        *Cost is optional - leave blank to use current price*
+        """)
+
+        bulk_input = st.text_area(
+            "Holdings (TICKER, SHARES, COST)",
+            height=150,
+            placeholder="AAPL, 50, 175.00\nMSFT, 30, 380.00\nSPY, 100\nVTI, 25",
+            key="bulk_input"
+        )
+
+        if st.button("Add All Holdings", type="primary", key="bulk_add_btn"):
+            if bulk_input.strip():
+                lines = [line.strip() for line in bulk_input.strip().split("\n") if line.strip()]
+                success_count = 0
+                errors = []
+
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+
+                for i, line in enumerate(lines):
+                    try:
+                        parts = [p.strip() for p in line.split(",")]
+                        if len(parts) < 2:
+                            errors.append(f"Line '{line}': Need at least TICKER and SHARES")
+                            continue
+
+                        sym = parts[0].upper()
+                        shares = float(parts[1])
+                        cost = float(parts[2]) if len(parts) > 2 and parts[2] else 0
+
+                        status_text.text(f"Processing {sym}...")
+                        data = fetch_security_data(sym)
+
+                        if data:
+                            final_cost = cost if cost > 0 else data["current_price"]
+                            holding = create_holding(sym, shares, final_cost)
+                            if holding:
+                                # Check if exists
+                                existing_idx = next(
+                                    (j for j, h in enumerate(st.session_state.holdings) if h.symbol == sym),
+                                    None
+                                )
+                                if existing_idx is not None:
+                                    st.session_state.holdings[existing_idx] = holding
+                                else:
+                                    st.session_state.holdings.append(holding)
+                                success_count += 1
+                        else:
+                            errors.append(f"{sym}: Could not fetch data")
+
+                    except ValueError as e:
+                        errors.append(f"Line '{line}': Invalid format")
+
+                    progress_bar.progress((i + 1) / len(lines))
+
+                status_text.empty()
+                progress_bar.empty()
+
+                if success_count > 0:
+                    st.success(f"Successfully added/updated {success_count} holdings!")
+                if errors:
+                    with st.expander(f"⚠ {len(errors)} error(s)", expanded=True):
+                        for err in errors:
+                            st.warning(err)
+                if success_count > 0:
+                    st.rerun()
 
     else:  # Quick Add Popular
         # Shares and price inputs for quick add
@@ -526,8 +565,9 @@ with tab_portfolio:
                     })
                     holdings_for_pie = top_holdings
 
-                # Create pie chart with company colors
-                fig_hold, ax_hold = plt.subplots(figsize=(7, 5))
+                # Create pie chart with company colors - dark background
+                fig_hold, ax_hold = plt.subplots(figsize=(7, 5), facecolor=CHART_BG_COLOR)
+                ax_hold.set_facecolor(CHART_BG_COLOR)
                 colors = [h["color"] for h in holdings_for_pie]
                 weights = [h["weight"] for h in holdings_for_pie]
                 labels = [f"{h['symbol']}" for h in holdings_for_pie]
@@ -543,16 +583,17 @@ with tab_portfolio:
                     labeldistance=1.1,
                 )
 
-                # Style the text
+                # Style the text for dark background
                 for text in texts:
                     text.set_fontsize(9)
                     text.set_fontweight('bold')
+                    text.set_color('white')
                 for autotext in autotexts:
                     autotext.set_fontsize(8)
                     autotext.set_color('white')
                     autotext.set_fontweight('bold')
 
-                ax_hold.set_title("Portfolio Holdings", fontsize=12, fontweight='bold')
+                ax_hold.set_title("Portfolio Holdings", fontsize=12, fontweight='bold', color='white')
                 fig_hold.tight_layout()
                 st.pyplot(fig_hold)
                 plt.close(fig_hold)
@@ -567,7 +608,7 @@ with tab_portfolio:
                     )
 
             with alloc_col2:
-                # Asset Type breakdown
+                # Asset Type breakdown - dark background
                 st.markdown("#### By Asset Type")
                 if summary["asset_allocation"]:
                     alloc_df = pd.DataFrame(
@@ -575,7 +616,8 @@ with tab_portfolio:
                         columns=["Asset Type", "Weight (%)"]
                     ).sort_values("Weight (%)", ascending=False)
 
-                    fig_type, ax_type = plt.subplots(figsize=(7, 3))
+                    fig_type, ax_type = plt.subplots(figsize=(7, 3), facecolor=CHART_BG_COLOR)
+                    ax_type.set_facecolor(CHART_FACE_COLOR)
                     type_colors = {
                         "Stock": "#1f77b4",
                         "ETF": "#2ca02c",
@@ -584,18 +626,19 @@ with tab_portfolio:
                     }
                     colors_type = [type_colors.get(t, "#666666") for t in alloc_df["Asset Type"]]
                     bars = ax_type.barh(alloc_df["Asset Type"], alloc_df["Weight (%)"], color=colors_type)
-                    ax_type.set_xlabel("Weight (%)")
-                    ax_type.set_title("Asset Type Breakdown")
+                    ax_type.set_xlabel("Weight (%)", color='white')
+                    ax_type.set_title("Asset Type Breakdown", color='white')
+                    ax_type.tick_params(colors='white')
                     for bar, val in zip(bars, alloc_df["Weight (%)"]):
                         ax_type.text(bar.get_width() + 1, bar.get_y() + bar.get_height()/2,
-                                    f'{val:.1f}%', va='center', fontsize=9)
+                                    f'{val:.1f}%', va='center', fontsize=9, color='white')
                     ax_type.set_xlim(0, max(alloc_df["Weight (%)"]) * 1.2)
                     ax_type.grid(True, alpha=0.3, axis="x")
                     fig_type.tight_layout()
                     st.pyplot(fig_type)
                     plt.close(fig_type)
 
-                # Sector breakdown (for stocks)
+                # Sector breakdown (for stocks) - dark background
                 if summary["sector_allocation"]:
                     st.markdown("#### By Sector (Stocks Only)")
                     sector_df = pd.DataFrame(
@@ -603,13 +646,15 @@ with tab_portfolio:
                         columns=["Sector", "Weight (%)"]
                     ).sort_values("Weight (%)", ascending=True)
 
-                    fig_sec, ax_sec = plt.subplots(figsize=(7, 4))
+                    fig_sec, ax_sec = plt.subplots(figsize=(7, 4), facecolor=CHART_BG_COLOR)
+                    ax_sec.set_facecolor(CHART_FACE_COLOR)
                     ax_sec.barh(sector_df["Sector"], sector_df["Weight (%)"], color="#1f77b4")
-                    ax_sec.set_xlabel("Weight (%)")
-                    ax_sec.set_title("Sector Breakdown")
+                    ax_sec.set_xlabel("Weight (%)", color='white')
+                    ax_sec.set_title("Sector Breakdown", color='white')
+                    ax_sec.tick_params(colors='white')
                     for i, (idx, row) in enumerate(sector_df.iterrows()):
                         ax_sec.text(row["Weight (%)"] + 0.5, i, f'{row["Weight (%)"]:.1f}%',
-                                   va='center', fontsize=8)
+                                   va='center', fontsize=8, color='white')
                     ax_sec.grid(True, alpha=0.3, axis="x")
                     fig_sec.tight_layout()
                     st.pyplot(fig_sec)
@@ -677,12 +722,48 @@ with tab_portfolio:
             height=min(400, 35 * len(holdings_df) + 38),
         )
 
-        # ── Delete Holdings ──
+        # ── Edit Holdings ──
+        with st.expander("Edit Holdings"):
+            st.caption("Adjust shares or average cost for existing holdings")
+
+            for i, h in enumerate(st.session_state.holdings):
+                edit_cols = st.columns([1, 1.5, 1, 1, 1])
+                with edit_cols[0]:
+                    st.markdown(f"**{h.symbol}**")
+                with edit_cols[1]:
+                    st.caption(f"{h.name[:20]}...")
+                with edit_cols[2]:
+                    edit_shares = st.number_input(
+                        "Shares",
+                        min_value=0.01,
+                        value=float(h.shares),
+                        step=1.0,
+                        key=f"edit_shares_{h.symbol}_{i}",
+                        label_visibility="collapsed"
+                    )
+                with edit_cols[3]:
+                    edit_cost = st.number_input(
+                        "Avg Cost",
+                        min_value=0.01,
+                        value=float(h.avg_cost),
+                        step=1.0,
+                        key=f"edit_cost_{h.symbol}_{i}",
+                        label_visibility="collapsed"
+                    )
+                with edit_cols[4]:
+                    if st.button("Update", key=f"update_{h.symbol}_{i}"):
+                        updated = create_holding(h.symbol, edit_shares, edit_cost)
+                        if updated:
+                            st.session_state.holdings[i] = updated
+                            st.success(f"Updated {h.symbol}")
+                            st.rerun()
+
+        # ── Remove Holdings ──
         with st.expander("Remove Holdings"):
             del_cols = st.columns(6)
             for i, h in enumerate(st.session_state.holdings):
                 with del_cols[i % 6]:
-                    if st.button(f"Remove {h.symbol}", key=f"del_{h.symbol}_{i}"):
+                    if st.button(f"❌ {h.symbol}", key=f"del_{h.symbol}_{i}"):
                         st.session_state.holdings.pop(i)
                         st.rerun()
 
@@ -718,7 +799,7 @@ with tab_portfolio:
             st.caption("Expected dividend ex-dates and earnings report dates")
 
             # Legend
-            legend_col1, legend_col2, legend_col3 = st.columns(3)
+            legend_col1, legend_col2, legend_col3, legend_col4 = st.columns(4)
             with legend_col1:
                 st.markdown(
                     "<span style='background-color: #d4edda; padding: 2px 8px; border-radius: 3px;'>"
@@ -733,8 +814,14 @@ with tab_portfolio:
                 )
             with legend_col3:
                 st.markdown(
+                    "<span style='background-color: #f8d7da; padding: 2px 8px; border-radius: 3px;'>"
+                    "🔴 Fed/Econ</span>",
+                    unsafe_allow_html=True
+                )
+            with legend_col4:
+                st.markdown(
                     "<span style='background-color: #cce5ff; padding: 2px 8px; border-radius: 3px;'>"
-                    "🔵 Both</span>",
+                    "🔵 Multiple</span>",
                     unsafe_allow_html=True
                 )
 
@@ -787,7 +874,7 @@ with tab_portfolio:
                 )
 
             # Monthly summary
-            sum_col1, sum_col2 = st.columns(2)
+            sum_col1, sum_col2, sum_col3 = st.columns(3)
             with sum_col1:
                 if cal_data["monthly_div_total"] > 0:
                     st.success(
@@ -806,6 +893,15 @@ with tab_portfolio:
                     )
                 else:
                     st.info("No earnings reports this month")
+            with sum_col3:
+                if cal_data.get("fed_events"):
+                    high_importance = sum(1 for e in cal_data["fed_events"] if e.importance == "HIGH")
+                    st.error(
+                        f"**Fed/Econ: {len(cal_data['fed_events'])} event(s)** "
+                        f"({high_importance} high importance)"
+                    )
+                else:
+                    st.info("No Fed/economic events this month")
 
             # Calendar grid display
             st.markdown("#### Calendar View")
@@ -828,22 +924,35 @@ with tab_portfolio:
                             day_num = day_data["day"]
                             div_events = day_data.get("dividends", [])
                             earn_events = day_data.get("earnings", [])
+                            fed_events = day_data.get("fed_events", [])
 
                             has_div = len(div_events) > 0
                             has_earn = len(earn_events) > 0
+                            has_fed = len(fed_events) > 0
+                            event_count = sum([has_div, has_earn, has_fed])
 
-                            if has_div and has_earn:
-                                # Both events - blue
-                                total_income = sum(e.expected_income for e in div_events)
-                                div_symbols = ", ".join(e.symbol for e in div_events)
-                                earn_symbols = ", ".join(e.symbol for e in earn_events)
+                            if event_count >= 2:
+                                # Multiple event types - blue
+                                lines = []
+                                if has_div:
+                                    div_symbols = ", ".join(e.symbol for e in div_events[:2])
+                                    lines.append(f"💵 {div_symbols}")
+                                if has_earn:
+                                    earn_symbols = ", ".join(e.symbol for e in earn_events[:2])
+                                    lines.append(f"📊 {earn_symbols}")
+                                if has_fed:
+                                    fed_types = ", ".join(e.event_type for e in fed_events[:2])
+                                    lines.append(f"🏛 {fed_types}")
+
+                                content = "<br>".join(
+                                    f"<span style='font-size: 0.65em; color: #000000; font-weight: bold;'>{l}</span>"
+                                    for l in lines
+                                )
                                 st.markdown(
                                     f"<div style='background-color: #cce5ff; padding: 4px; "
                                     f"border-radius: 4px; text-align: center; min-height: 70px; color: #000000;'>"
                                     f"<strong style='color: #000000;'>{day_num}</strong><br>"
-                                    f"<span style='font-size: 0.7em; color: #000000; font-weight: bold;'>💵 {div_symbols}</span><br>"
-                                    f"<span style='font-size: 0.7em; color: #000000; font-weight: bold;'>📊 {earn_symbols}</span>"
-                                    f"</div>",
+                                    f"{content}</div>",
                                     unsafe_allow_html=True
                                 )
                             elif has_div:
@@ -869,6 +978,19 @@ with tab_portfolio:
                                     f"<strong style='color: #000000;'>{day_num}</strong><br>"
                                     f"<span style='font-size: 0.75em; color: #000000; font-weight: bold;'>📊 {symbols}</span><br>"
                                     f"<span style='font-size: 0.7em; color: #000000;'>{confirmed_mark}</span>"
+                                    f"</div>",
+                                    unsafe_allow_html=True
+                                )
+                            elif has_fed:
+                                # Fed/Economic event only - red
+                                event_types = ", ".join(e.event_type for e in fed_events)
+                                importance = "⚠" if any(e.importance == "HIGH" for e in fed_events) else ""
+                                st.markdown(
+                                    f"<div style='background-color: #f8d7da; padding: 4px; "
+                                    f"border-radius: 4px; text-align: center; min-height: 70px; color: #000000;'>"
+                                    f"<strong style='color: #000000;'>{day_num}</strong><br>"
+                                    f"<span style='font-size: 0.75em; color: #000000; font-weight: bold;'>🏛 {event_types}</span><br>"
+                                    f"<span style='font-size: 0.7em; color: #000000;'>{importance}</span>"
                                     f"</div>",
                                     unsafe_allow_html=True
                                 )
@@ -925,6 +1047,29 @@ with tab_portfolio:
                     "quarterly reporting patterns. Confirm with official company announcements."
                 )
 
+            # Detailed events - Fed/Economic
+            if cal_data.get("fed_events"):
+                st.markdown("#### Fed & Economic Events")
+                fed_event_data = []
+                for event in cal_data["fed_events"]:
+                    fed_event_data.append({
+                        "Date": event.event_date.strftime("%b %d, %Y"),
+                        "Event": event.event_type,
+                        "Description": event.description,
+                        "Importance": f"{'⚠ ' if event.importance == 'HIGH' else ''}{event.importance}",
+                    })
+
+                st.dataframe(
+                    pd.DataFrame(fed_event_data),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                st.caption(
+                    "Fed/Economic events can cause significant market volatility. "
+                    "Consider adjusting positions before high-importance events."
+                )
+
             # 12-Month Projection Chart
             st.markdown("#### 12-Month Dividend Income Projection")
             with st.spinner("Calculating projections..."):
@@ -941,11 +1086,13 @@ with tab_portfolio:
                 ])
 
                 if proj_df["Income"].sum() > 0:
-                    fig_proj, ax_proj = plt.subplots(figsize=(10, 4))
+                    fig_proj, ax_proj = plt.subplots(figsize=(10, 4), facecolor=CHART_BG_COLOR)
+                    ax_proj.set_facecolor(CHART_FACE_COLOR)
                     bars = ax_proj.bar(proj_df["Month"], proj_df["Income"], color="#28a745")
-                    ax_proj.set_xlabel("Month")
-                    ax_proj.set_ylabel("Expected Income ($)")
-                    ax_proj.set_title("12-Month Dividend Income Projection")
+                    ax_proj.set_xlabel("Month", color='white')
+                    ax_proj.set_ylabel("Expected Income ($)", color='white')
+                    ax_proj.set_title("12-Month Dividend Income Projection", color='white')
+                    ax_proj.tick_params(colors='white')
                     plt.xticks(rotation=45, ha="right")
 
                     for bar, val in zip(bars, proj_df["Income"]):
@@ -956,7 +1103,8 @@ with tab_portfolio:
                                 f"${val:,.0f}",
                                 ha="center",
                                 va="bottom",
-                                fontsize=8
+                                fontsize=8,
+                                color='white'
                             )
 
                     ax_proj.grid(True, alpha=0.3, axis="y")
@@ -1157,24 +1305,26 @@ with tab_recommend:
                 )
                 payoff_total = payoff_dollars * max(card.recommended_contracts, 1)
 
-                fig, ax = plt.subplots(figsize=(9, 4))
+                fig, ax = plt.subplots(figsize=(9, 4), facecolor=CHART_BG_COLOR)
+                ax.set_facecolor(CHART_FACE_COLOR)
                 ax.plot(price_range, payoff_total, color="#1f77b4", linewidth=2)
-                ax.axhline(0, color="black", linewidth=0.5)
-                ax.axvline(spot, color="gray", linestyle="--", alpha=0.5,
+                ax.axhline(0, color="white", linewidth=0.5)
+                ax.axvline(spot, color="gray", linestyle="--", alpha=0.7,
                            label=f"Spot ${spot:.2f}")
                 for be in rec.breakeven:
-                    ax.axvline(be, color="green", linestyle=":", alpha=0.7,
+                    ax.axvline(be, color="#00ff00", linestyle=":", alpha=0.7,
                                label=f"B/E ${be:.2f}")
                 ax.fill_between(price_range, payoff_total, 0,
-                                where=(payoff_total > 0), color="green", alpha=0.1)
+                                where=(payoff_total > 0), color="green", alpha=0.2)
                 ax.fill_between(price_range, payoff_total, 0,
-                                where=(payoff_total < 0), color="red", alpha=0.1)
-                ax.set_xlabel("Stock Price at Expiration")
-                ax.set_ylabel("Profit / Loss ($)")
+                                where=(payoff_total < 0), color="red", alpha=0.2)
+                ax.set_xlabel("Stock Price at Expiration", color='white')
+                ax.set_ylabel("Profit / Loss ($)", color='white')
                 contracts_label = max(card.recommended_contracts, 1)
-                ax.set_title(f"{strat.name} — P&L at Expiration ({contracts_label} contract{'s' if contracts_label > 1 else ''})")
+                ax.set_title(f"{strat.name} — P&L at Expiration ({contracts_label} contract{'s' if contracts_label > 1 else ''})", color='white')
                 ax.yaxis.set_major_formatter(mticker.FormatStrFormatter('$%.0f'))
-                ax.legend(fontsize=8)
+                ax.tick_params(colors='white')
+                ax.legend(fontsize=8, facecolor=CHART_FACE_COLOR, labelcolor='white')
                 ax.grid(True, alpha=0.3)
                 fig.tight_layout()
                 st.pyplot(fig)
@@ -1287,7 +1437,8 @@ with tab_greeks:
                                index=0, key="greek_select")
     greek_col = greek_type.lower()
 
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig, ax = plt.subplots(figsize=(10, 5), facecolor=CHART_BG_COLOR)
+    ax.set_facecolor(CHART_FACE_COLOR)
     calls_g = liquid[liquid["optionType"] == "call"].sort_values("strike")
     puts_g = liquid[liquid["optionType"] == "put"].sort_values("strike")
 
@@ -1299,10 +1450,11 @@ with tab_greeks:
                 label=f"Put {greek_type}", linewidth=1.5)
 
     ax.axvline(spot, color="gray", linestyle="--", alpha=0.7, label=f"Spot ${spot:.2f}")
-    ax.set_xlabel("Strike Price")
-    ax.set_ylabel(greek_type)
-    ax.set_title(f"{symbol} — {greek_type} by Strike ({selected_exp})")
-    ax.legend()
+    ax.set_xlabel("Strike Price", color='white')
+    ax.set_ylabel(greek_type, color='white')
+    ax.set_title(f"{symbol} — {greek_type} by Strike ({selected_exp})", color='white')
+    ax.tick_params(colors='white')
+    ax.legend(facecolor=CHART_FACE_COLOR, labelcolor='white')
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     st.pyplot(fig)
@@ -1310,7 +1462,8 @@ with tab_greeks:
 
     # IV Smile
     st.subheader("Volatility Smile")
-    fig2, ax2 = plt.subplots(figsize=(10, 5))
+    fig2, ax2 = plt.subplots(figsize=(10, 5), facecolor=CHART_BG_COLOR)
+    ax2.set_facecolor(CHART_FACE_COLOR)
     if not calls_g.empty:
         ax2.plot(calls_g["strike"], calls_g["impliedVolatility"] * 100,
                  "b-o", markersize=3, label="Call IV", linewidth=1.5)
@@ -1318,10 +1471,11 @@ with tab_greeks:
         ax2.plot(puts_g["strike"], puts_g["impliedVolatility"] * 100,
                  "r-o", markersize=3, label="Put IV", linewidth=1.5)
     ax2.axvline(spot, color="gray", linestyle="--", alpha=0.7, label=f"Spot ${spot:.2f}")
-    ax2.set_xlabel("Strike Price")
-    ax2.set_ylabel("Implied Volatility (%)")
-    ax2.set_title(f"{symbol} — Volatility Smile ({selected_exp})")
-    ax2.legend()
+    ax2.set_xlabel("Strike Price", color='white')
+    ax2.set_ylabel("Implied Volatility (%)", color='white')
+    ax2.set_title(f"{symbol} — Volatility Smile ({selected_exp})", color='white')
+    ax2.tick_params(colors='white')
+    ax2.legend(facecolor=CHART_FACE_COLOR, labelcolor='white')
     ax2.grid(True, alpha=0.3)
     fig2.tight_layout()
     st.pyplot(fig2)
@@ -1337,14 +1491,16 @@ with tab_greeks:
         }
         vol_df = pd.DataFrame(vol_data)
 
-        fig3, ax3 = plt.subplots(figsize=(8, 4))
+        fig3, ax3 = plt.subplots(figsize=(8, 4), facecolor=CHART_BG_COLOR)
+        ax3.set_facecolor(CHART_FACE_COLOR)
         colors = ["#ff7f0e", "#1f77b4", "#1f77b4", "#1f77b4"]
         bars = ax3.barh(vol_df["Metric"], vol_df["Value"] * 100, color=colors)
-        ax3.set_xlabel("Volatility (%)")
-        ax3.set_title(f"{symbol} — IV vs. Realized Volatility")
+        ax3.set_xlabel("Volatility (%)", color='white')
+        ax3.set_title(f"{symbol} — IV vs. Realized Volatility", color='white')
+        ax3.tick_params(colors='white')
         for bar, val in zip(bars, vol_df["Value"]):
             ax3.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2,
-                     f"{val:.1%}", va="center", fontsize=10)
+                     f"{val:.1%}", va="center", fontsize=10, color='white')
         ax3.grid(True, alpha=0.3, axis="x")
         fig3.tight_layout()
         st.pyplot(fig3)
@@ -1421,17 +1577,19 @@ with tab_entropy:
             columns=["Sector", "Weight"],
         ).sort_values("Weight", ascending=True)
 
-        fig4, ax4 = plt.subplots(figsize=(8, 5))
+        fig4, ax4 = plt.subplots(figsize=(8, 5), facecolor=CHART_BG_COLOR)
+        ax4.set_facecolor(CHART_FACE_COLOR)
         colors_s = ["#ff7f0e" if w > 0.12 else "#1f77b4"
                      for w in sector_df["Weight"]]
         bars = ax4.barh(sector_df["Sector"], sector_df["Weight"] * 100,
                         color=colors_s)
-        ax4.set_xlabel("Weight (%)")
-        ax4.set_title("S&P 500 Sector Weights (Estimated from ETF Performance)")
+        ax4.set_xlabel("Weight (%)", color='white')
+        ax4.set_title("S&P 500 Sector Weights (Estimated from ETF Performance)", color='white')
+        ax4.tick_params(colors='white')
 
         for bar, val in zip(bars, sector_df["Weight"]):
             ax4.text(bar.get_width() + 0.3, bar.get_y() + bar.get_height() / 2,
-                     f"{val:.1%}", va="center", fontsize=9)
+                     f"{val:.1%}", va="center", fontsize=9, color='white')
 
         ax4.grid(True, alpha=0.3, axis="x")
         fig4.tight_layout()

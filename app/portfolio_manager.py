@@ -1451,13 +1451,138 @@ def build_earnings_calendar(
     }
 
 
+@dataclass
+class FedEvent:
+    """A Federal Reserve or major financial news event."""
+    event_date: datetime
+    event_type: str  # "FOMC", "Jobs Report", "CPI", "GDP", etc.
+    description: str
+    importance: str  # "HIGH", "MEDIUM", "LOW"
+
+
+# Federal Reserve FOMC meeting dates for 2024-2026
+# These are announced in advance and are reliable
+FED_FOMC_DATES = [
+    # 2024
+    ("2024-01-31", "FOMC Decision", "HIGH"),
+    ("2024-03-20", "FOMC Decision", "HIGH"),
+    ("2024-05-01", "FOMC Decision", "HIGH"),
+    ("2024-06-12", "FOMC Decision", "HIGH"),
+    ("2024-07-31", "FOMC Decision", "HIGH"),
+    ("2024-09-18", "FOMC Decision", "HIGH"),
+    ("2024-11-07", "FOMC Decision", "HIGH"),
+    ("2024-12-18", "FOMC Decision", "HIGH"),
+    # 2025
+    ("2025-01-29", "FOMC Decision", "HIGH"),
+    ("2025-03-19", "FOMC Decision", "HIGH"),
+    ("2025-05-07", "FOMC Decision", "HIGH"),
+    ("2025-06-18", "FOMC Decision", "HIGH"),
+    ("2025-07-30", "FOMC Decision", "HIGH"),
+    ("2025-09-17", "FOMC Decision", "HIGH"),
+    ("2025-11-05", "FOMC Decision", "HIGH"),
+    ("2025-12-17", "FOMC Decision", "HIGH"),
+    # 2026
+    ("2026-01-28", "FOMC Decision", "HIGH"),
+    ("2026-03-18", "FOMC Decision", "HIGH"),
+    ("2026-04-29", "FOMC Decision", "HIGH"),
+    ("2026-06-17", "FOMC Decision", "HIGH"),
+    ("2026-07-29", "FOMC Decision", "HIGH"),
+    ("2026-09-16", "FOMC Decision", "HIGH"),
+    ("2026-11-04", "FOMC Decision", "HIGH"),
+    ("2026-12-16", "FOMC Decision", "HIGH"),
+]
+
+# Economic calendar - recurring monthly events
+# Jobs report: First Friday of each month
+# CPI: Around 10th-14th of month
+# GDP: End of month (quarterly)
+
+
+def get_fed_and_econ_events(target_year: int, target_month: int) -> List[FedEvent]:
+    """
+    Get Fed decisions and major economic events for a specific month.
+    """
+    events = []
+
+    # Add FOMC dates
+    for date_str, event_type, importance in FED_FOMC_DATES:
+        event_date = datetime.strptime(date_str, "%Y-%m-%d")
+        if event_date.year == target_year and event_date.month == target_month:
+            events.append(FedEvent(
+                event_date=event_date,
+                event_type="FOMC",
+                description=f"Federal Reserve {event_type}",
+                importance=importance,
+            ))
+
+    # Add recurring economic events
+    # Jobs Report - First Friday of month
+    first_day = datetime(target_year, target_month, 1)
+    days_until_friday = (4 - first_day.weekday()) % 7
+    first_friday = first_day + timedelta(days=days_until_friday)
+    events.append(FedEvent(
+        event_date=first_friday,
+        event_type="Jobs Report",
+        description="Non-Farm Payrolls & Unemployment",
+        importance="HIGH",
+    ))
+
+    # CPI - Usually around 10th-13th
+    cpi_day = 12 if target_month % 2 == 1 else 13
+    try:
+        cpi_date = datetime(target_year, target_month, cpi_day)
+        # Adjust for weekends
+        if cpi_date.weekday() == 5:  # Saturday
+            cpi_date -= timedelta(days=1)
+        elif cpi_date.weekday() == 6:  # Sunday
+            cpi_date += timedelta(days=1)
+        events.append(FedEvent(
+            event_date=cpi_date,
+            event_type="CPI",
+            description="Consumer Price Index Report",
+            importance="HIGH",
+        ))
+    except ValueError:
+        pass
+
+    # Options expiration - Third Friday of month
+    third_friday = first_day + timedelta(days=days_until_friday + 14)
+    events.append(FedEvent(
+        event_date=third_friday,
+        event_type="OpEx",
+        description="Monthly Options Expiration",
+        importance="MEDIUM",
+    ))
+
+    # Quarterly events (GDP, etc.)
+    if target_month in [1, 4, 7, 10]:
+        # GDP usually released ~25th-28th
+        gdp_day = 26
+        try:
+            gdp_date = datetime(target_year, target_month, gdp_day)
+            if gdp_date.weekday() == 5:
+                gdp_date -= timedelta(days=1)
+            elif gdp_date.weekday() == 6:
+                gdp_date += timedelta(days=1)
+            events.append(FedEvent(
+                event_date=gdp_date,
+                event_type="GDP",
+                description="Quarterly GDP Report",
+                importance="HIGH",
+            ))
+        except ValueError:
+            pass
+
+    return events
+
+
 def build_combined_calendar(
     holdings: List[Holding],
     target_year: int,
     target_month: int
 ) -> Dict:
     """
-    Build combined dividend + earnings calendar for a specific month.
+    Build combined dividend + earnings + Fed/econ calendar for a specific month.
     """
     # Get dividend events
     div_events = []
@@ -1492,20 +1617,29 @@ def build_combined_calendar(
         if e.earnings_date.year == target_year and e.earnings_date.month == target_month
     ]
 
+    # Get Fed and economic events
+    fed_events = get_fed_and_econ_events(target_year, target_month)
+
     # Build by-day mapping (combined)
     by_day = {}
 
     for event in month_div_events:
         day = event.ex_date.day
         if day not in by_day:
-            by_day[day] = {"dividends": [], "earnings": []}
+            by_day[day] = {"dividends": [], "earnings": [], "fed_events": []}
         by_day[day]["dividends"].append(event)
 
     for event in month_earnings_events:
         day = event.earnings_date.day
         if day not in by_day:
-            by_day[day] = {"dividends": [], "earnings": []}
+            by_day[day] = {"dividends": [], "earnings": [], "fed_events": []}
         by_day[day]["earnings"].append(event)
+
+    for event in fed_events:
+        day = event.event_date.day
+        if day not in by_day:
+            by_day[day] = {"dividends": [], "earnings": [], "fed_events": []}
+        by_day[day]["fed_events"].append(event)
 
     # Calculate monthly dividend total
     monthly_div_total = sum(e.expected_income for e in month_div_events)
@@ -1519,19 +1653,21 @@ def build_combined_calendar(
         week_data = []
         for day in week:
             if day == 0:
-                week_data.append({"day": 0, "dividends": [], "earnings": []})
+                week_data.append({"day": 0, "dividends": [], "earnings": [], "fed_events": []})
             else:
-                day_data = by_day.get(day, {"dividends": [], "earnings": []})
+                day_data = by_day.get(day, {"dividends": [], "earnings": [], "fed_events": []})
                 week_data.append({
                     "day": day,
                     "dividends": day_data.get("dividends", []),
                     "earnings": day_data.get("earnings", []),
+                    "fed_events": day_data.get("fed_events", []),
                 })
         calendar_grid.append(week_data)
 
     return {
         "dividend_events": month_div_events,
         "earnings_events": month_earnings_events,
+        "fed_events": fed_events,
         "calendar_grid": calendar_grid,
         "monthly_div_total": monthly_div_total,
         "by_day": by_day,
