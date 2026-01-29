@@ -39,13 +39,24 @@ from portfolio_manager import (
     get_company_color,
     get_stock_performance,
     get_portfolio_performance,
+    create_watchlist_item,
+    refresh_watchlist_item,
+    export_holdings_to_csv,
+    import_holdings_from_csv,
+    export_watchlist_to_csv,
+    get_dividend_payment_history,
+    get_monthly_dividend_totals,
+    calculate_drip_projection,
+    calculate_drip_vs_no_drip,
     POPULAR_STOCKS,
     POPULAR_ETFS,
     POPULAR_BOND_ETFS,
     POPULAR_REITS,
     TICKER_DATABASE,
     FedEvent,
+    WatchlistItem,
 )
+import io
 
 # Set dark theme for matplotlib charts
 plt.style.use('dark_background')
@@ -1376,6 +1387,289 @@ with tab_portfolio:
                         f"**Projected Annual Dividend Income: ${annual_total:,.2f}** "
                         f"(${annual_total/12:,.2f}/month average)"
                     )
+
+        st.markdown("---")
+
+        # ══════════════════════════════════════════════
+        # DIVIDEND HISTORY & DRIP CALCULATOR
+        # ══════════════════════════════════════════════
+        st.markdown("### Dividend Income Tools")
+
+        div_tool_tab1, div_tool_tab2 = st.tabs(["Dividend History", "DRIP Calculator"])
+
+        with div_tool_tab1:
+            st.caption("Actual dividend payments received based on your holdings and purchase dates")
+
+            with st.spinner("Loading dividend history..."):
+                div_history = get_dividend_payment_history(st.session_state.holdings, years=3)
+
+            if not div_history.empty:
+                # Monthly totals chart
+                monthly_divs = get_monthly_dividend_totals(st.session_state.holdings, years=2)
+
+                if not monthly_divs.empty:
+                    fig_div_hist, ax_div_hist = plt.subplots(figsize=(10, 4), facecolor=CHART_BG_COLOR)
+                    ax_div_hist.set_facecolor(CHART_FACE_COLOR)
+                    bars = ax_div_hist.bar(monthly_divs["Month"], monthly_divs["Total"], color="#28a745")
+                    ax_div_hist.set_xlabel("Month", color='white')
+                    ax_div_hist.set_ylabel("Dividends Received ($)", color='white')
+                    ax_div_hist.set_title("Historical Dividend Income", color='white')
+                    ax_div_hist.tick_params(colors='white')
+                    plt.xticks(rotation=45, ha="right")
+                    ax_div_hist.grid(True, alpha=0.3, axis="y")
+                    fig_div_hist.tight_layout()
+                    st.pyplot(fig_div_hist)
+                    plt.close(fig_div_hist)
+
+                # Summary metrics
+                total_received = div_history["Total"].sum()
+                avg_monthly = total_received / max(len(monthly_divs), 1)
+                st.success(f"**Total Dividends Received: ${total_received:,.2f}** | Average: ${avg_monthly:,.2f}/month")
+
+                # Recent payments table
+                st.markdown("**Recent Dividend Payments:**")
+                recent_divs = div_history.head(15).copy()
+                recent_divs["Date"] = recent_divs["Date"].dt.strftime("%Y-%m-%d")
+                recent_divs["Amount"] = recent_divs["Amount"].apply(lambda x: f"${x:.4f}")
+                recent_divs["Total"] = recent_divs["Total"].apply(lambda x: f"${x:.2f}")
+                recent_divs["Shares"] = recent_divs["Shares"].apply(lambda x: f"{x:,.0f}")
+                st.dataframe(recent_divs, use_container_width=True, hide_index=True)
+            else:
+                st.info("No dividend history available yet. Dividends will appear here after ex-dates pass.")
+
+        with div_tool_tab2:
+            st.caption("See the power of dividend reinvestment over time")
+
+            # Select a holding for DRIP simulation
+            drip_col1, drip_col2 = st.columns(2)
+
+            with drip_col1:
+                drip_symbols = [h.symbol for h in st.session_state.holdings if h.dividend_yield > 0]
+                if drip_symbols:
+                    drip_symbol = st.selectbox("Select Holding", drip_symbols, key="drip_symbol")
+                    drip_holding = next((h for h in st.session_state.holdings if h.symbol == drip_symbol), None)
+                else:
+                    st.warning("No dividend-paying holdings in portfolio")
+                    drip_holding = None
+
+            with drip_col2:
+                drip_years = st.slider("Projection Years", 5, 30, 10, key="drip_years")
+
+            if drip_holding:
+                drip_col3, drip_col4 = st.columns(2)
+                with drip_col3:
+                    price_growth = st.slider("Annual Price Growth %", 0, 15, 5, key="drip_price_growth") / 100
+                with drip_col4:
+                    div_growth = st.slider("Annual Dividend Growth %", 0, 15, 3, key="drip_div_growth") / 100
+
+                # Calculate DRIP projection
+                initial_value = drip_holding.market_value
+                drip_result = calculate_drip_vs_no_drip(
+                    initial_investment=initial_value,
+                    share_price=drip_holding.current_price,
+                    dividend_yield=drip_holding.dividend_yield,
+                    years=drip_years,
+                    annual_price_growth=price_growth,
+                    annual_dividend_growth=div_growth,
+                )
+
+                # Summary
+                st.markdown(f"**{drip_symbol} DRIP Projection ({drip_years} years)**")
+                drip_sum_cols = st.columns(4)
+                with drip_sum_cols[0]:
+                    st.metric("Starting Value", f"${initial_value:,.0f}")
+                with drip_sum_cols[1]:
+                    st.metric("With DRIP", f"${drip_result['drip_final_value']:,.0f}")
+                with drip_sum_cols[2]:
+                    st.metric("Without DRIP", f"${drip_result['no_drip_final_value']:,.0f}")
+                with drip_sum_cols[3]:
+                    st.metric(
+                        "DRIP Advantage",
+                        f"${drip_result['drip_advantage']:,.0f}",
+                        delta=f"+{drip_result['drip_advantage_pct']:.1f}%",
+                        delta_color="normal"
+                    )
+
+                # Chart
+                fig_drip, ax_drip = plt.subplots(figsize=(10, 5), facecolor=CHART_BG_COLOR)
+                ax_drip.set_facecolor(CHART_FACE_COLOR)
+
+                drip_df = drip_result["drip"]
+                no_drip_df = drip_result["no_drip"]
+
+                ax_drip.plot(drip_df["Year"], drip_df["Portfolio Value"],
+                            color="#00ff00", linewidth=2, label="With DRIP")
+                ax_drip.plot(no_drip_df["Year"],
+                            no_drip_df["Portfolio Value"] + no_drip_df["Cumulative Dividends"],
+                            color="#ff6666", linewidth=2, linestyle="--", label="Without DRIP")
+
+                ax_drip.fill_between(drip_df["Year"], drip_df["Portfolio Value"],
+                                    no_drip_df["Portfolio Value"] + no_drip_df["Cumulative Dividends"],
+                                    alpha=0.2, color="green")
+
+                ax_drip.set_xlabel("Years", color='white')
+                ax_drip.set_ylabel("Total Value ($)", color='white')
+                ax_drip.set_title(f"{drip_symbol} - DRIP vs No DRIP Projection", color='white')
+                ax_drip.tick_params(colors='white')
+                ax_drip.legend(facecolor=CHART_FACE_COLOR, labelcolor='white')
+                ax_drip.grid(True, alpha=0.3)
+                fig_drip.tight_layout()
+                st.pyplot(fig_drip)
+                plt.close(fig_drip)
+
+                # Shares growth
+                st.caption(f"Shares: {drip_holding.shares:,.2f} → {drip_result['drip_final_shares']:,.2f} with DRIP")
+
+    # ══════════════════════════════════════════════
+    # WATCHLIST
+    # ══════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("### Watchlist")
+    st.caption("Track stocks you're interested in but don't own yet")
+
+    # Initialize watchlist
+    if "watchlist" not in st.session_state:
+        st.session_state.watchlist = []
+
+    # Add to watchlist
+    watch_col1, watch_col2, watch_col3, watch_col4 = st.columns([1.5, 1, 2, 1])
+    with watch_col1:
+        watch_symbol = st.text_input("Symbol", placeholder="TSLA", key="watch_symbol").upper().strip()
+    with watch_col2:
+        watch_target = st.number_input("Target Price ($)", min_value=0.0, value=0.0, key="watch_target",
+                                        help="Optional buy target price")
+    with watch_col3:
+        watch_notes = st.text_input("Notes", placeholder="Waiting for pullback...", key="watch_notes")
+    with watch_col4:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("Add to Watchlist", key="add_watch"):
+            if watch_symbol:
+                with st.spinner(f"Adding {watch_symbol}..."):
+                    item = create_watchlist_item(
+                        watch_symbol,
+                        watch_target if watch_target > 0 else None,
+                        watch_notes if watch_notes else None
+                    )
+                    if item:
+                        st.session_state.watchlist.append(item)
+                        st.success(f"Added {watch_symbol} to watchlist")
+                        st.rerun()
+                    else:
+                        st.error(f"Could not find {watch_symbol}")
+
+    # Display watchlist
+    if st.session_state.watchlist:
+        # Refresh button
+        if st.button("Refresh Prices", key="refresh_watchlist"):
+            with st.spinner("Refreshing..."):
+                st.session_state.watchlist = [refresh_watchlist_item(w) for w in st.session_state.watchlist]
+                st.rerun()
+
+        watch_data = []
+        for w in st.session_state.watchlist:
+            target_str = f"${w.target_price:.2f}" if w.target_price else "-"
+            at_target = "✓" if w.target_price and w.current_price <= w.target_price else ""
+            watch_data.append({
+                "Symbol": w.symbol,
+                "Name": w.name[:20] + "..." if len(w.name) > 20 else w.name,
+                "Price": f"${w.current_price:.2f}",
+                "Target": target_str,
+                "At Target": at_target,
+                "Change": f"{w.change_since_add_pct:+.1f}%",
+                "Yield": f"{w.dividend_yield*100:.2f}%",
+                "52W High": f"${w.fifty_two_week_high:.2f}" if w.fifty_two_week_high else "-",
+                "52W Low": f"${w.fifty_two_week_low:.2f}" if w.fifty_two_week_low else "-",
+                "Notes": w.notes or "-",
+            })
+
+        st.dataframe(pd.DataFrame(watch_data), use_container_width=True, hide_index=True)
+
+        # Move to portfolio / Remove buttons
+        watch_action_cols = st.columns(min(len(st.session_state.watchlist), 6))
+        for i, w in enumerate(st.session_state.watchlist):
+            with watch_action_cols[i % 6]:
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    if st.button(f"Buy {w.symbol}", key=f"buy_watch_{w.symbol}_{i}"):
+                        holding = create_holding(w.symbol, 10, w.current_price, datetime.now(), w.notes)
+                        if holding:
+                            st.session_state.holdings.append(holding)
+                            st.session_state.watchlist.pop(i)
+                            st.rerun()
+                with col_b:
+                    if st.button(f"❌", key=f"del_watch_{w.symbol}_{i}"):
+                        st.session_state.watchlist.pop(i)
+                        st.rerun()
+    else:
+        st.info("Your watchlist is empty. Add stocks you're watching above.")
+
+    # ══════════════════════════════════════════════
+    # IMPORT / EXPORT
+    # ══════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("### Import / Export")
+
+    exp_col1, exp_col2 = st.columns(2)
+
+    with exp_col1:
+        st.markdown("**Export Portfolio**")
+        if st.session_state.holdings:
+            csv_data = export_holdings_to_csv(st.session_state.holdings)
+            st.download_button(
+                "Download Holdings CSV",
+                csv_data,
+                file_name="portfolio_holdings.csv",
+                mime="text/csv",
+                key="export_holdings"
+            )
+        else:
+            st.caption("No holdings to export")
+
+        if st.session_state.watchlist:
+            watch_csv = export_watchlist_to_csv(st.session_state.watchlist)
+            st.download_button(
+                "Download Watchlist CSV",
+                watch_csv,
+                file_name="watchlist.csv",
+                mime="text/csv",
+                key="export_watchlist"
+            )
+
+    with exp_col2:
+        st.markdown("**Import Portfolio**")
+        uploaded_file = st.file_uploader("Upload CSV", type="csv", key="import_file")
+
+        if uploaded_file:
+            csv_content = uploaded_file.read().decode("utf-8")
+            parsed = import_holdings_from_csv(csv_content)
+
+            if parsed:
+                st.success(f"Found {len(parsed)} holdings in CSV")
+                if st.button("Import All", key="do_import"):
+                    with st.spinner("Importing..."):
+                        success = 0
+                        for item in parsed:
+                            holding = create_holding(
+                                item["symbol"],
+                                item["shares"],
+                                item["cost"],
+                                item["purchase_date"],
+                                item.get("notes")
+                            )
+                            if holding:
+                                existing_idx = next(
+                                    (i for i, h in enumerate(st.session_state.holdings) if h.symbol == item["symbol"]),
+                                    None
+                                )
+                                if existing_idx is not None:
+                                    st.session_state.holdings[existing_idx] = holding
+                                else:
+                                    st.session_state.holdings.append(holding)
+                                success += 1
+                        st.success(f"Imported {success} holdings!")
+                        st.rerun()
+            else:
+                st.warning("Could not parse CSV. Use format: Symbol,Shares,Cost,Date,Notes")
 
     else:
         st.info("Your portfolio is empty. Add some holdings above to get started.")
