@@ -217,6 +217,7 @@ class Holding:
     pe_ratio: Optional[float]
     fifty_two_week_high: Optional[float]
     fifty_two_week_low: Optional[float]
+    purchase_date: Optional[datetime] = None
 
 
 def classify_asset_type(info: dict) -> str:
@@ -299,7 +300,7 @@ def fetch_security_data(symbol: str) -> Optional[Dict]:
         return None
 
 
-def create_holding(symbol: str, shares: float, avg_cost: float) -> Optional[Holding]:
+def create_holding(symbol: str, shares: float, avg_cost: float, purchase_date: Optional[datetime] = None) -> Optional[Holding]:
     """Create a Holding object with live data."""
     data = fetch_security_data(symbol)
     if data is None:
@@ -330,7 +331,150 @@ def create_holding(symbol: str, shares: float, avg_cost: float) -> Optional[Hold
         pe_ratio=data["pe_ratio"],
         fifty_two_week_high=data["fifty_two_week_high"],
         fifty_two_week_low=data["fifty_two_week_low"],
+        purchase_date=purchase_date,
     )
+
+
+def get_stock_history(symbol: str, period: str = "1y") -> pd.DataFrame:
+    """
+    Fetch historical price data for a stock.
+    period: "1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "max"
+    """
+    try:
+        ticker = yf.Ticker(symbol)
+        hist = ticker.history(period=period)
+        if hist.empty:
+            return pd.DataFrame()
+
+        hist = hist.reset_index()
+        hist["Date"] = pd.to_datetime(hist["Date"]).dt.tz_localize(None)
+        return hist[["Date", "Open", "High", "Low", "Close", "Volume"]]
+    except Exception:
+        return pd.DataFrame()
+
+
+def get_stock_performance(symbol: str, period: str = "1y", start_date: Optional[datetime] = None) -> Dict:
+    """
+    Calculate stock performance metrics for a given period.
+    Returns price history and performance stats.
+    """
+    try:
+        ticker = yf.Ticker(symbol)
+
+        if start_date:
+            # Use start date if provided (from purchase date)
+            hist = ticker.history(start=start_date)
+        else:
+            hist = ticker.history(period=period)
+
+        if hist.empty or len(hist) < 2:
+            return None
+
+        hist = hist.reset_index()
+        hist["Date"] = pd.to_datetime(hist["Date"]).dt.tz_localize(None)
+
+        start_price = hist["Close"].iloc[0]
+        end_price = hist["Close"].iloc[-1]
+        total_return = ((end_price - start_price) / start_price) * 100
+
+        # Calculate daily returns for volatility
+        hist["Daily_Return"] = hist["Close"].pct_change()
+        volatility = hist["Daily_Return"].std() * np.sqrt(252) * 100  # Annualized
+
+        # High and low in period
+        period_high = hist["High"].max()
+        period_low = hist["Low"].min()
+
+        return {
+            "history": hist[["Date", "Close"]],
+            "start_price": start_price,
+            "end_price": end_price,
+            "total_return": total_return,
+            "volatility": volatility,
+            "period_high": period_high,
+            "period_low": period_low,
+            "days": len(hist),
+        }
+    except Exception as e:
+        return None
+
+
+def get_portfolio_performance(holdings: List[Holding], period: str = "1y") -> Dict:
+    """
+    Calculate portfolio performance over time.
+    Weights each holding by its current value and tracks combined performance.
+    """
+    if not holdings:
+        return None
+
+    try:
+        # Get history for each holding
+        all_histories = {}
+        for h in holdings:
+            perf = get_stock_performance(h.symbol, period)
+            if perf and not perf["history"].empty:
+                all_histories[h.symbol] = {
+                    "history": perf["history"],
+                    "shares": h.shares,
+                    "cost_basis": h.avg_cost,
+                }
+
+        if not all_histories:
+            return None
+
+        # Find common date range
+        min_dates = [h["history"]["Date"].min() for h in all_histories.values()]
+        max_dates = [h["history"]["Date"].max() for h in all_histories.values()]
+        start_date = max(min_dates)
+        end_date = min(max_dates)
+
+        # Create combined dataframe
+        date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+        portfolio_df = pd.DataFrame({"Date": date_range})
+
+        # For each holding, get value on each date
+        for symbol, data in all_histories.items():
+            hist = data["history"].copy()
+            hist = hist.set_index("Date")
+            hist = hist.reindex(date_range, method='ffill')
+            portfolio_df[f"{symbol}_value"] = hist["Close"].values * data["shares"]
+            portfolio_df[f"{symbol}_cost"] = data["cost_basis"] * data["shares"]
+
+        # Calculate total portfolio value and cost
+        value_cols = [c for c in portfolio_df.columns if c.endswith("_value")]
+        cost_cols = [c for c in portfolio_df.columns if c.endswith("_cost")]
+
+        portfolio_df["Total_Value"] = portfolio_df[value_cols].sum(axis=1)
+        total_cost = portfolio_df[cost_cols].iloc[0].sum()
+
+        # Calculate portfolio return
+        portfolio_df["Portfolio_Return"] = ((portfolio_df["Total_Value"] - total_cost) / total_cost) * 100
+
+        # Get SPY for benchmark comparison
+        spy_perf = get_stock_performance("SPY", period)
+        if spy_perf:
+            spy_hist = spy_perf["history"].copy()
+            spy_hist = spy_hist.set_index("Date")
+            spy_hist = spy_hist.reindex(date_range, method='ffill')
+            spy_start = spy_hist["Close"].iloc[0]
+            portfolio_df["SPY_Return"] = ((spy_hist["Close"].values - spy_start) / spy_start) * 100
+
+        start_value = portfolio_df["Total_Value"].iloc[0]
+        end_value = portfolio_df["Total_Value"].iloc[-1]
+        total_return = ((end_value - total_cost) / total_cost) * 100
+
+        return {
+            "history": portfolio_df[["Date", "Total_Value", "Portfolio_Return"] +
+                                   (["SPY_Return"] if "SPY_Return" in portfolio_df.columns else [])],
+            "start_value": start_value,
+            "end_value": end_value,
+            "total_cost": total_cost,
+            "total_return": total_return,
+            "total_pnl": end_value - total_cost,
+            "days": len(portfolio_df),
+        }
+    except Exception as e:
+        return None
 
 
 def calculate_portfolio_summary(holdings: List[Holding]) -> Dict:

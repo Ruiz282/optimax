@@ -37,6 +37,8 @@ from portfolio_manager import (
     get_annual_dividend_projection,
     search_tickers,
     get_company_color,
+    get_stock_performance,
+    get_portfolio_performance,
     POPULAR_STOCKS,
     POPULAR_ETFS,
     POPULAR_BOND_ETFS,
@@ -302,7 +304,7 @@ with tab_portfolio:
 
     if add_method == "Single Entry":
         # Simple single ticker entry without dropdown
-        col1, col2, col3, col4 = st.columns([1.5, 1, 1, 1])
+        col1, col2, col3, col4, col5 = st.columns([1.5, 1, 1, 1, 1])
 
         with col1:
             new_symbol = st.text_input(
@@ -320,6 +322,10 @@ with tab_portfolio:
                                         help="Leave at 0 to use current price")
 
         with col4:
+            new_date = st.date_input("Purchase Date", value=datetime.now().date(), key="new_date",
+                                      help="Date you purchased this holding")
+
+        with col5:
             st.markdown("<br>", unsafe_allow_html=True)
             add_btn = st.button("Add", type="primary", key="add_btn")
 
@@ -328,7 +334,8 @@ with tab_portfolio:
                 data = fetch_security_data(new_symbol)
                 if data:
                     cost = new_cost if new_cost > 0 else data["current_price"]
-                    holding = create_holding(new_symbol, new_shares, cost)
+                    purchase_dt = datetime.combine(new_date, datetime.min.time())
+                    holding = create_holding(new_symbol, new_shares, cost, purchase_dt)
                     if holding:
                         # Check if already exists - update instead
                         existing_idx = next(
@@ -348,22 +355,22 @@ with tab_portfolio:
     elif add_method == "Bulk Add (Multiple)":
         # Bulk add multiple tickers at once
         st.markdown("""
-        **Enter multiple holdings** - one per line in format: `TICKER, SHARES, COST`
+        **Enter multiple holdings** - one per line in format: `TICKER, SHARES, COST, DATE`
 
         Example:
         ```
-        AAPL, 50, 175.00
-        MSFT, 30, 380.00
+        AAPL, 50, 175.00, 2023-06-15
+        MSFT, 30, 380.00, 2024-01-10
         SPY, 100
         VTI, 25, 250.00
         ```
-        *Cost is optional - leave blank to use current price*
+        *Cost and Date are optional - leave blank to use current price/today*
         """)
 
         bulk_input = st.text_area(
-            "Holdings (TICKER, SHARES, COST)",
+            "Holdings (TICKER, SHARES, COST, DATE)",
             height=150,
-            placeholder="AAPL, 50, 175.00\nMSFT, 30, 380.00\nSPY, 100\nVTI, 25",
+            placeholder="AAPL, 50, 175.00, 2023-06-15\nMSFT, 30, 380.00, 2024-01-10\nSPY, 100\nVTI, 25",
             key="bulk_input"
         )
 
@@ -387,12 +394,22 @@ with tab_portfolio:
                         shares = float(parts[1])
                         cost = float(parts[2]) if len(parts) > 2 and parts[2] else 0
 
+                        # Parse date if provided
+                        purchase_dt = None
+                        if len(parts) > 3 and parts[3]:
+                            try:
+                                purchase_dt = datetime.strptime(parts[3].strip(), "%Y-%m-%d")
+                            except ValueError:
+                                purchase_dt = datetime.now()
+                        else:
+                            purchase_dt = datetime.now()
+
                         status_text.text(f"Processing {sym}...")
                         data = fetch_security_data(sym)
 
                         if data:
                             final_cost = cost if cost > 0 else data["current_price"]
-                            holding = create_holding(sym, shares, final_cost)
+                            holding = create_holding(sym, shares, final_cost, purchase_dt)
                             if holding:
                                 # Check if exists
                                 existing_idx = next(
@@ -690,14 +707,13 @@ with tab_portfolio:
                 "Shares": h.shares,
                 "Price": h.current_price,
                 "Avg Cost": h.avg_cost,
+                "Purchased": h.purchase_date.strftime("%Y-%m-%d") if h.purchase_date else "-",
                 "Value": h.market_value,
                 "P&L": h.unrealized_pnl,
                 "P&L %": h.unrealized_pnl_pct,
                 "Div Yield": h.dividend_yield * 100,
-                "Annual Div": h.annual_dividend,
                 "Income": h.annual_income,
                 "Beta": h.beta,
-                "Sector": h.sector or "-",
             })
 
         holdings_df = pd.DataFrame(holdings_data)
@@ -710,7 +726,6 @@ with tab_portfolio:
         display_df["P&L"] = display_df["P&L"].apply(lambda x: f"${x:+,.2f}")
         display_df["P&L %"] = display_df["P&L %"].apply(lambda x: f"{x:+.2f}%")
         display_df["Div Yield"] = display_df["Div Yield"].apply(lambda x: f"{x:.2f}%")
-        display_df["Annual Div"] = display_df["Annual Div"].apply(lambda x: f"${x:.2f}")
         display_df["Income"] = display_df["Income"].apply(lambda x: f"${x:,.2f}")
         display_df["Beta"] = display_df["Beta"].apply(lambda x: f"{x:.2f}" if x else "-")
         display_df["Shares"] = display_df["Shares"].apply(lambda x: f"{x:,.2f}")
@@ -724,35 +739,38 @@ with tab_portfolio:
 
         # ── Edit Holdings ──
         with st.expander("Edit Holdings"):
-            st.caption("Adjust shares or average cost for existing holdings")
+            st.caption("Adjust shares, cost, or purchase date for existing holdings")
 
             for i, h in enumerate(st.session_state.holdings):
-                edit_cols = st.columns([1, 1.5, 1, 1, 1])
+                edit_cols = st.columns([0.8, 1, 1, 1.2, 0.8])
                 with edit_cols[0]:
                     st.markdown(f"**{h.symbol}**")
                 with edit_cols[1]:
-                    st.caption(f"{h.name[:20]}...")
-                with edit_cols[2]:
                     edit_shares = st.number_input(
                         "Shares",
                         min_value=0.01,
                         value=float(h.shares),
                         step=1.0,
                         key=f"edit_shares_{h.symbol}_{i}",
-                        label_visibility="collapsed"
                     )
-                with edit_cols[3]:
+                with edit_cols[2]:
                     edit_cost = st.number_input(
                         "Avg Cost",
                         min_value=0.01,
                         value=float(h.avg_cost),
                         step=1.0,
                         key=f"edit_cost_{h.symbol}_{i}",
-                        label_visibility="collapsed"
+                    )
+                with edit_cols[3]:
+                    edit_date = st.date_input(
+                        "Purchase Date",
+                        value=h.purchase_date.date() if h.purchase_date else datetime.now().date(),
+                        key=f"edit_date_{h.symbol}_{i}",
                     )
                 with edit_cols[4]:
-                    if st.button("Update", key=f"update_{h.symbol}_{i}"):
-                        updated = create_holding(h.symbol, edit_shares, edit_cost)
+                    if st.button("Save", key=f"update_{h.symbol}_{i}"):
+                        edit_purchase_dt = datetime.combine(edit_date, datetime.min.time())
+                        updated = create_holding(h.symbol, edit_shares, edit_cost, edit_purchase_dt)
                         if updated:
                             st.session_state.holdings[i] = updated
                             st.success(f"Updated {h.symbol}")
@@ -770,6 +788,230 @@ with tab_portfolio:
             if st.button("Clear All Holdings", type="secondary", key="clear_all"):
                 st.session_state.holdings = []
                 st.rerun()
+
+        st.markdown("---")
+
+        # ══════════════════════════════════════════════
+        # PERFORMANCE CHARTS
+        # ══════════════════════════════════════════════
+        st.markdown("### Performance Charts")
+
+        # Initialize selected stock for performance view
+        if "selected_perf_stock" not in st.session_state:
+            st.session_state.selected_perf_stock = None
+
+        perf_tab1, perf_tab2 = st.tabs(["Individual Stock", "Portfolio Performance"])
+
+        with perf_tab1:
+            st.caption("Click a stock to view its price performance")
+
+            # Stock selector buttons
+            stock_cols = st.columns(min(len(st.session_state.holdings), 8))
+            for i, h in enumerate(st.session_state.holdings):
+                with stock_cols[i % 8]:
+                    btn_style = "primary" if st.session_state.selected_perf_stock == h.symbol else "secondary"
+                    if st.button(h.symbol, key=f"perf_btn_{h.symbol}", type=btn_style):
+                        st.session_state.selected_perf_stock = h.symbol
+                        st.rerun()
+
+            # Period selector
+            period_col1, period_col2 = st.columns([1, 3])
+            with period_col1:
+                perf_period = st.selectbox(
+                    "Time Period",
+                    ["1D", "1W", "1M", "3M", "6M", "1Y", "All Time"],
+                    index=3,
+                    key="perf_period"
+                )
+
+            period_map = {
+                "1D": "1d",
+                "1W": "5d",
+                "1M": "1mo",
+                "3M": "3mo",
+                "6M": "6mo",
+                "1Y": "1y",
+                "All Time": "max",
+            }
+
+            if st.session_state.selected_perf_stock:
+                selected_sym = st.session_state.selected_perf_stock
+                selected_holding = next(
+                    (h for h in st.session_state.holdings if h.symbol == selected_sym),
+                    None
+                )
+
+                if selected_holding:
+                    with st.spinner(f"Loading {selected_sym} performance..."):
+                        # Get performance data - use purchase date if "All Time" and we have it
+                        if perf_period == "All Time" and selected_holding.purchase_date:
+                            perf_data = get_stock_performance(
+                                selected_sym,
+                                period="max",
+                                start_date=selected_holding.purchase_date
+                            )
+                        else:
+                            perf_data = get_stock_performance(selected_sym, period_map[perf_period])
+
+                    if perf_data:
+                        # Stock info header
+                        info_cols = st.columns(5)
+                        with info_cols[0]:
+                            st.metric("Current Price", f"${selected_holding.current_price:,.2f}")
+                        with info_cols[1]:
+                            st.metric(
+                                f"{perf_period} Return",
+                                f"{perf_data['total_return']:+.2f}%",
+                                delta_color="normal" if perf_data['total_return'] >= 0 else "inverse"
+                            )
+                        with info_cols[2]:
+                            st.metric("Period High", f"${perf_data['period_high']:,.2f}")
+                        with info_cols[3]:
+                            st.metric("Period Low", f"${perf_data['period_low']:,.2f}")
+                        with info_cols[4]:
+                            if selected_holding.purchase_date:
+                                st.metric("Purchased", selected_holding.purchase_date.strftime("%b %d, %Y"))
+                            else:
+                                st.metric("Days", f"{perf_data['days']}")
+
+                        # Price chart
+                        fig_stock, ax_stock = plt.subplots(figsize=(10, 5), facecolor=CHART_BG_COLOR)
+                        ax_stock.set_facecolor(CHART_FACE_COLOR)
+
+                        hist = perf_data["history"]
+                        color = "#00ff00" if perf_data['total_return'] >= 0 else "#ff4444"
+                        ax_stock.plot(hist["Date"], hist["Close"], color=color, linewidth=2)
+                        ax_stock.fill_between(hist["Date"], hist["Close"], alpha=0.2, color=color)
+
+                        # Add cost basis line if available
+                        if selected_holding.avg_cost > 0:
+                            ax_stock.axhline(
+                                selected_holding.avg_cost,
+                                color="#ffaa00",
+                                linestyle="--",
+                                alpha=0.8,
+                                label=f"Avg Cost: ${selected_holding.avg_cost:.2f}"
+                            )
+
+                        ax_stock.set_xlabel("Date", color='white')
+                        ax_stock.set_ylabel("Price ($)", color='white')
+                        ax_stock.set_title(f"{selected_holding.name} ({selected_sym}) - {perf_period}", color='white')
+                        ax_stock.tick_params(colors='white')
+                        ax_stock.legend(facecolor=CHART_FACE_COLOR, labelcolor='white')
+                        ax_stock.grid(True, alpha=0.3)
+                        plt.xticks(rotation=45)
+                        fig_stock.tight_layout()
+                        st.pyplot(fig_stock)
+                        plt.close(fig_stock)
+
+                        # Your position performance
+                        if selected_holding.avg_cost > 0:
+                            st.markdown("**Your Position:**")
+                            pos_cols = st.columns(4)
+                            with pos_cols[0]:
+                                st.metric("Shares", f"{selected_holding.shares:,.2f}")
+                            with pos_cols[1]:
+                                st.metric("Total Cost", f"${selected_holding.total_cost:,.2f}")
+                            with pos_cols[2]:
+                                st.metric("Market Value", f"${selected_holding.market_value:,.2f}")
+                            with pos_cols[3]:
+                                st.metric(
+                                    "Your P&L",
+                                    f"${selected_holding.unrealized_pnl:+,.2f}",
+                                    delta=f"{selected_holding.unrealized_pnl_pct:+.2f}%",
+                                    delta_color="normal" if selected_holding.unrealized_pnl >= 0 else "inverse"
+                                )
+                    else:
+                        st.warning(f"Could not load performance data for {selected_sym}")
+            else:
+                st.info("Click a stock above to view its performance chart")
+
+        with perf_tab2:
+            st.caption("Track your portfolio performance vs. S&P 500 benchmark")
+
+            # Portfolio period selector
+            port_period = st.selectbox(
+                "Time Period",
+                ["1M", "3M", "6M", "1Y", "All Time"],
+                index=2,
+                key="port_perf_period"
+            )
+
+            with st.spinner("Calculating portfolio performance..."):
+                port_perf = get_portfolio_performance(
+                    st.session_state.holdings,
+                    period_map.get(port_period, "6mo")
+                )
+
+            if port_perf:
+                # Portfolio summary metrics
+                port_cols = st.columns(5)
+                with port_cols[0]:
+                    st.metric("Total Value", f"${port_perf['end_value']:,.2f}")
+                with port_cols[1]:
+                    st.metric("Total Cost", f"${port_perf['total_cost']:,.2f}")
+                with port_cols[2]:
+                    st.metric(
+                        "Total P&L",
+                        f"${port_perf['total_pnl']:+,.2f}",
+                        delta=f"{port_perf['total_return']:+.2f}%",
+                        delta_color="normal" if port_perf['total_pnl'] >= 0 else "inverse"
+                    )
+                with port_cols[3]:
+                    st.metric("Period", f"{port_perf['days']} days")
+                with port_cols[4]:
+                    if "SPY_Return" in port_perf["history"].columns:
+                        spy_return = port_perf["history"]["SPY_Return"].iloc[-1]
+                        alpha = port_perf['total_return'] - spy_return
+                        st.metric(
+                            "Alpha vs SPY",
+                            f"{alpha:+.2f}%",
+                            delta="Outperforming" if alpha > 0 else "Underperforming",
+                            delta_color="normal" if alpha >= 0 else "inverse"
+                        )
+
+                # Portfolio performance chart
+                fig_port, ax_port = plt.subplots(figsize=(10, 5), facecolor=CHART_BG_COLOR)
+                ax_port.set_facecolor(CHART_FACE_COLOR)
+
+                hist = port_perf["history"]
+                port_color = "#00ff00" if port_perf['total_return'] >= 0 else "#ff4444"
+
+                ax_port.plot(
+                    hist["Date"],
+                    hist["Portfolio_Return"],
+                    color=port_color,
+                    linewidth=2,
+                    label=f"Your Portfolio ({port_perf['total_return']:+.2f}%)"
+                )
+
+                # Add SPY benchmark
+                if "SPY_Return" in hist.columns:
+                    spy_final = hist["SPY_Return"].iloc[-1]
+                    ax_port.plot(
+                        hist["Date"],
+                        hist["SPY_Return"],
+                        color="#888888",
+                        linewidth=2,
+                        linestyle="--",
+                        label=f"S&P 500 ({spy_final:+.2f}%)"
+                    )
+
+                ax_port.axhline(0, color="white", linewidth=0.5, alpha=0.5)
+                ax_port.set_xlabel("Date", color='white')
+                ax_port.set_ylabel("Return (%)", color='white')
+                ax_port.set_title(f"Portfolio Performance - {port_period}", color='white')
+                ax_port.tick_params(colors='white')
+                ax_port.legend(facecolor=CHART_FACE_COLOR, labelcolor='white', loc='upper left')
+                ax_port.grid(True, alpha=0.3)
+                plt.xticks(rotation=45)
+                fig_port.tight_layout()
+                st.pyplot(fig_port)
+                plt.close(fig_port)
+            else:
+                st.warning("Could not calculate portfolio performance. Make sure you have holdings with valid data.")
+
+        st.markdown("---")
 
         # ── Top Dividend Payers ──
         if any(h.dividend_yield > 0 for h in st.session_state.holdings):
