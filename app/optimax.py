@@ -289,6 +289,22 @@ with tab_portfolio:
     # Initialize session state for holdings
     if "holdings" not in st.session_state:
         st.session_state.holdings = []
+        # Pre-load test holdings
+        test_stocks = [
+            ("AAPL", 50, 175.00, "2023-06-15"),
+            ("MSFT", 30, 380.00, "2023-09-01"),
+            ("NVDA", 20, 450.00, "2024-01-15"),
+            ("GOOGL", 25, 140.00, "2023-12-01"),
+            ("AMZN", 40, 145.00, "2024-03-01"),
+            ("SPY", 100, 450.00, "2023-01-01"),
+            ("SCHD", 75, 75.00, "2022-06-01"),
+            ("O", 50, 55.00, "2023-03-15"),
+        ]
+        for sym, shares, cost, date_str in test_stocks:
+            purchase_dt = datetime.strptime(date_str, "%Y-%m-%d")
+            holding = create_holding(sym, shares, cost, purchase_dt)
+            if holding:
+                st.session_state.holdings.append(holding)
     if "editing_holding" not in st.session_state:
         st.session_state.editing_holding = None
 
