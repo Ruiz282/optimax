@@ -1671,15 +1671,6 @@ with tab_portfolio:
             else:
                 st.warning("Could not parse CSV. Use format: Symbol,Shares,Cost,Date,Notes")
 
-    else:
-        st.info("Your portfolio is empty. Add some holdings above to get started.")
-        st.markdown("""
-        **Quick Start:**
-        1. Use "Quick Add Popular" to add common stocks, ETFs, or bonds with one click
-        2. Or enter a custom symbol with your shares and average cost
-        3. The portfolio will track prices, P&L, and dividend income automatically
-        """)
-
 
 # ═════════════════════════════════════════════
 # TAB 1: Strategy Recommender + Trade Cards
