@@ -1418,9 +1418,20 @@ def get_dividend_history(symbol: str, lookback_years: int = 5) -> pd.DataFrame:
         if dividends.empty:
             return pd.DataFrame()
 
+        # Convert to timezone-naive for easier handling
+        if dividends.index.tz is not None:
+            dividends.index = dividends.index.tz_localize(None)
+
         # Use more historical data for better predictions (up to 5 years)
         cutoff = datetime.now() - timedelta(days=lookback_years * 365)
         dividends = dividends[dividends.index >= cutoff]
+
+        if dividends.empty:
+            return pd.DataFrame()
+
+        # Filter out future dividends (yfinance sometimes returns these)
+        today = datetime.now()
+        dividends = dividends[dividends.index <= today]
 
         if dividends.empty:
             return pd.DataFrame()
@@ -1429,7 +1440,7 @@ def get_dividend_history(symbol: str, lookback_years: int = 5) -> pd.DataFrame:
             "ex_date": dividends.index,
             "amount": dividends.values,
         })
-        df["ex_date"] = pd.to_datetime(df["ex_date"]).dt.tz_localize(None)
+        df["ex_date"] = pd.to_datetime(df["ex_date"])
 
         # Add month and day-of-month for pattern detection
         df["month"] = df["ex_date"].dt.month
@@ -1484,14 +1495,40 @@ def predict_future_dividends(
     name: str,
     shares: float,
     div_history: pd.DataFrame,
-    months_ahead: int = 12
+    months_ahead: int = 12,
+    include_recent_past: bool = True
 ) -> List[DividendEvent]:
     """
     Predict future dividend payments based on comprehensive historical pattern analysis.
     Uses all available data for more accurate predictions.
+
+    If include_recent_past is True, also includes actual dividends from the past 60 days
+    so the calendar shows recently paid dividends.
     """
     if div_history.empty:
         return []
+
+    events = []
+    current_date = datetime.now()
+
+    # Include actual recent dividends from history (past 60 days)
+    if include_recent_past:
+        cutoff_date = current_date - timedelta(days=60)
+        for _, row in div_history.iterrows():
+            ex_date = row["ex_date"]
+            if isinstance(ex_date, pd.Timestamp):
+                ex_date = ex_date.to_pydatetime()
+            if ex_date >= cutoff_date:
+                events.append(DividendEvent(
+                    symbol=symbol,
+                    name=name,
+                    ex_date=ex_date,
+                    pay_date=ex_date + timedelta(days=14),
+                    amount=row["amount"],
+                    shares=shares,
+                    expected_income=row["amount"] * shares,
+                    frequency="Actual",
+                ))
 
     frequency, months_between, typical_months = estimate_dividend_frequency(div_history)
 
@@ -1607,7 +1644,19 @@ def predict_future_dividends(
                     ))
                     payment_count += 1
 
-    return future_events
+    # Combine actual recent events with predicted future events
+    # Avoid duplicates by checking dates
+    all_events = events.copy()
+    for fe in future_events:
+        # Don't add if we already have an actual event within 7 days
+        is_duplicate = any(
+            abs((fe.ex_date - e.ex_date).days) < 7
+            for e in events
+        )
+        if not is_duplicate:
+            all_events.append(fe)
+
+    return all_events
 
 
 def build_dividend_calendar(
