@@ -320,8 +320,9 @@ with st.spinner(f"Loading options chain for {selected_exp}..."):
 # Main Tabs
 # ─────────────────────────────────────────────
 
-tab_portfolio, tab_options, tab_entropy = st.tabs([
+tab_portfolio, tab_calendar, tab_options, tab_entropy = st.tabs([
     "Portfolio Manager",
+    "Calendar & News",
     "Options Trading",
     "Entropy Analysis",
 ])
@@ -1113,342 +1114,6 @@ with tab_portfolio:
                         delta_color="off",
                     )
 
-            st.markdown("---")
-
-            # ══════════════════════════════════════════════
-            # DIVIDEND & EARNINGS CALENDAR
-            # ══════════════════════════════════════════════
-            st.markdown("### Dividend & Earnings Calendar")
-            st.caption("Expected dividend ex-dates and earnings report dates")
-
-            # Legend
-            legend_col1, legend_col2, legend_col3, legend_col4 = st.columns(4)
-            with legend_col1:
-                st.markdown(
-                    "<span style='background-color: #d4edda; padding: 2px 8px; border-radius: 3px;'>"
-                    "🟢 Dividend</span>",
-                    unsafe_allow_html=True
-                )
-            with legend_col2:
-                st.markdown(
-                    "<span style='background-color: #fff3cd; padding: 2px 8px; border-radius: 3px;'>"
-                    "🟡 Earnings</span>",
-                    unsafe_allow_html=True
-                )
-            with legend_col3:
-                st.markdown(
-                    "<span style='background-color: #f8d7da; padding: 2px 8px; border-radius: 3px;'>"
-                    "🔴 Fed/Econ</span>",
-                    unsafe_allow_html=True
-                )
-            with legend_col4:
-                st.markdown(
-                    "<span style='background-color: #cce5ff; padding: 2px 8px; border-radius: 3px;'>"
-                    "🔵 Multiple</span>",
-                    unsafe_allow_html=True
-                )
-
-            # Initialize calendar state
-            if "cal_year" not in st.session_state:
-                st.session_state.cal_year = datetime.now().year
-            if "cal_month" not in st.session_state:
-                st.session_state.cal_month = datetime.now().month
-
-            # Month navigation
-            nav_col1, nav_col2, nav_col3, nav_col4, nav_col5 = st.columns([1, 1, 2, 1, 1])
-
-            with nav_col1:
-                if st.button("◀ Prev", key="prev_month"):
-                    if st.session_state.cal_month == 1:
-                        st.session_state.cal_month = 12
-                        st.session_state.cal_year -= 1
-                    else:
-                        st.session_state.cal_month -= 1
-                    st.rerun()
-
-            with nav_col2:
-                if st.button("Today", key="today_month"):
-                    st.session_state.cal_year = datetime.now().year
-                    st.session_state.cal_month = datetime.now().month
-                    st.rerun()
-
-            with nav_col3:
-                month_name = cal_module.month_name[st.session_state.cal_month]
-                st.markdown(
-                    f"<h3 style='text-align: center; margin: 0;'>{month_name} {st.session_state.cal_year}</h3>",
-                    unsafe_allow_html=True
-                )
-
-            with nav_col5:
-                if st.button("Next ▶", key="next_month"):
-                    if st.session_state.cal_month == 12:
-                        st.session_state.cal_month = 1
-                        st.session_state.cal_year += 1
-                    else:
-                        st.session_state.cal_month += 1
-                    st.rerun()
-
-            # Build combined calendar data
-            with st.spinner("Loading calendar..."):
-                cal_data = build_combined_calendar(
-                    st.session_state.holdings,
-                    st.session_state.cal_year,
-                    st.session_state.cal_month
-                )
-
-            # Monthly summary
-            sum_col1, sum_col2, sum_col3 = st.columns(3)
-            with sum_col1:
-                if cal_data["monthly_div_total"] > 0:
-                    st.success(
-                        f"**Dividends: ${cal_data['monthly_div_total']:,.2f}** from "
-                        f"{len(cal_data['dividend_events'])} payment(s)"
-                    )
-                else:
-                    st.info("No dividends expected this month")
-            with sum_col2:
-                if cal_data["earnings_events"]:
-                    confirmed = sum(1 for e in cal_data["earnings_events"] if e.is_confirmed)
-                    estimated = len(cal_data["earnings_events"]) - confirmed
-                    st.warning(
-                        f"**Earnings: {len(cal_data['earnings_events'])} report(s)** "
-                        f"({confirmed} confirmed, {estimated} estimated)"
-                    )
-                else:
-                    st.info("No earnings reports this month")
-            with sum_col3:
-                if cal_data.get("fed_events"):
-                    high_importance = sum(1 for e in cal_data["fed_events"] if e.importance == "HIGH")
-                    st.error(
-                        f"**Fed/Econ: {len(cal_data['fed_events'])} event(s)** "
-                        f"({high_importance} high importance)"
-                    )
-                else:
-                    st.info("No Fed/economic events this month")
-
-            # Calendar grid display
-            st.markdown("#### Calendar View")
-
-            # Header row
-            day_names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-            header_cols = st.columns(7)
-            for i, day_name in enumerate(day_names):
-                with header_cols[i]:
-                    st.markdown(f"**{day_name}**")
-
-            # Calendar weeks
-            for week in cal_data["calendar_grid"]:
-                week_cols = st.columns(7)
-                for i, day_data in enumerate(week):
-                    with week_cols[i]:
-                        if day_data["day"] == 0:
-                            st.markdown("&nbsp;")
-                        else:
-                            day_num = day_data["day"]
-                            div_events = day_data.get("dividends", [])
-                            earn_events = day_data.get("earnings", [])
-                            fed_events = day_data.get("fed_events", [])
-
-                            has_div = len(div_events) > 0
-                            has_earn = len(earn_events) > 0
-                            has_fed = len(fed_events) > 0
-                            event_count = sum([has_div, has_earn, has_fed])
-
-                            if event_count >= 2:
-                                # Multiple event types - blue
-                                lines = []
-                                if has_div:
-                                    # Show each stock with its dividend amount
-                                    div_details = [f"{e.symbol}: ${e.expected_income:.0f}" for e in div_events[:2]]
-                                    if len(div_events) > 2:
-                                        div_details.append(f"+{len(div_events)-2} more")
-                                    lines.append(f"💵 {', '.join(div_details)}")
-                                if has_earn:
-                                    earn_symbols = ", ".join(e.symbol for e in earn_events[:2])
-                                    lines.append(f"📊 {earn_symbols}")
-                                if has_fed:
-                                    fed_types = ", ".join(e.event_type for e in fed_events[:2])
-                                    lines.append(f"🏛 {fed_types}")
-
-                                content = "<br>".join(
-                                    f"<span style='font-size: 0.65em; color: #000000; font-weight: bold;'>{l}</span>"
-                                    for l in lines
-                                )
-                                st.markdown(
-                                    f"<div style='background-color: #cce5ff; padding: 4px; "
-                                    f"border-radius: 4px; text-align: center; min-height: 70px; color: #000000;'>"
-                                    f"<strong style='color: #000000;'>{day_num}</strong><br>"
-                                    f"{content}</div>",
-                                    unsafe_allow_html=True
-                                )
-                            elif has_div:
-                                # Dividend only - green - show per-stock amounts
-                                total_income = sum(e.expected_income for e in div_events)
-                                # Show each stock with amount
-                                div_lines = [f"{e.symbol}: ${e.expected_income:.2f}" for e in div_events[:3]]
-                                if len(div_events) > 3:
-                                    div_lines.append(f"+{len(div_events)-3} more")
-                                div_content = "<br>".join(
-                                    f"<span style='font-size: 0.65em; color: #000000;'>{l}</span>"
-                                    for l in div_lines
-                                )
-                                st.markdown(
-                                    f"<div style='background-color: #d4edda; padding: 4px; "
-                                    f"border-radius: 4px; text-align: center; min-height: 70px; color: #000000;'>"
-                                    f"<strong style='color: #000000;'>{day_num}</strong><br>"
-                                    f"<span style='font-size: 0.7em; color: #000000; font-weight: bold;'>💵 ${total_income:,.0f}</span><br>"
-                                    f"{div_content}"
-                                    f"</div>",
-                                    unsafe_allow_html=True
-                                )
-                            elif has_earn:
-                                # Earnings only - yellow
-                                symbols = ", ".join(e.symbol for e in earn_events)
-                                confirmed_mark = "✓" if all(e.is_confirmed for e in earn_events) else "?"
-                                st.markdown(
-                                    f"<div style='background-color: #fff3cd; padding: 4px; "
-                                    f"border-radius: 4px; text-align: center; min-height: 70px; color: #000000;'>"
-                                    f"<strong style='color: #000000;'>{day_num}</strong><br>"
-                                    f"<span style='font-size: 0.75em; color: #000000; font-weight: bold;'>📊 {symbols}</span><br>"
-                                    f"<span style='font-size: 0.7em; color: #000000;'>{confirmed_mark}</span>"
-                                    f"</div>",
-                                    unsafe_allow_html=True
-                                )
-                            elif has_fed:
-                                # Fed/Economic event only - red
-                                event_types = ", ".join(e.event_type for e in fed_events)
-                                importance = "⚠" if any(e.importance == "HIGH" for e in fed_events) else ""
-                                st.markdown(
-                                    f"<div style='background-color: #f8d7da; padding: 4px; "
-                                    f"border-radius: 4px; text-align: center; min-height: 70px; color: #000000;'>"
-                                    f"<strong style='color: #000000;'>{day_num}</strong><br>"
-                                    f"<span style='font-size: 0.75em; color: #000000; font-weight: bold;'>🏛 {event_types}</span><br>"
-                                    f"<span style='font-size: 0.7em; color: #000000;'>{importance}</span>"
-                                    f"</div>",
-                                    unsafe_allow_html=True
-                                )
-                            else:
-                                # Regular day
-                                st.markdown(
-                                    f"<div style='padding: 4px; text-align: center; "
-                                    f"min-height: 70px; color: #333333;'>{day_num}</div>",
-                                    unsafe_allow_html=True
-                                )
-
-            # Detailed events - Dividends
-            if cal_data["dividend_events"]:
-                st.markdown("#### Dividend Details")
-                div_event_data = []
-                for event in cal_data["dividend_events"]:
-                    div_event_data.append({
-                        "Ex-Date": event.ex_date.strftime("%b %d, %Y"),
-                        "Symbol": event.symbol,
-                        "Name": event.name[:20] + "..." if len(event.name) > 20 else event.name,
-                        "Frequency": event.frequency,
-                        "Amount/Share": f"${event.amount:.4f}",
-                        "Shares": f"{event.shares:,.0f}",
-                        "Expected Income": f"${event.expected_income:,.2f}",
-                    })
-
-                st.dataframe(
-                    pd.DataFrame(div_event_data),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-
-            # Detailed events - Earnings
-            if cal_data["earnings_events"]:
-                st.markdown("#### Earnings Report Details")
-                earn_event_data = []
-                for event in cal_data["earnings_events"]:
-                    earn_event_data.append({
-                        "Date": event.earnings_date.strftime("%b %d, %Y"),
-                        "Symbol": event.symbol,
-                        "Name": event.name[:20] + "..." if len(event.name) > 20 else event.name,
-                        "Status": "✓ Confirmed" if event.is_confirmed else "? Estimated",
-                        "EPS Est.": f"${event.eps_estimate:.2f}" if event.eps_estimate else "-",
-                    })
-
-                st.dataframe(
-                    pd.DataFrame(earn_event_data),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-
-                st.caption(
-                    "Note: Earnings dates marked as 'Estimated' are projections based on typical "
-                    "quarterly reporting patterns. Confirm with official company announcements."
-                )
-
-            # Detailed events - Fed/Economic with clickable links
-            if cal_data.get("fed_events"):
-                st.markdown("#### Fed & Economic Events")
-
-                for event in cal_data["fed_events"]:
-                    importance_badge = "🔴" if event.importance == "HIGH" else "🟡" if event.importance == "MEDIUM" else "🟢"
-
-                    col_date, col_event, col_link = st.columns([2, 4, 1])
-                    with col_date:
-                        st.markdown(f"**{event.event_date.strftime('%b %d, %Y')}**")
-                    with col_event:
-                        st.markdown(f"{importance_badge} **{event.event_type}** - {event.description}")
-                    with col_link:
-                        if event.url:
-                            st.markdown(f"[📎 Details]({event.url})")
-
-                st.caption(
-                    "Fed/Economic events can cause significant market volatility. "
-                    "Consider adjusting positions before high-importance events."
-                )
-
-            # 12-Month Projection Chart (Interactive Plotly)
-            st.markdown("#### 12-Month Dividend Income Projection")
-            with st.spinner("Calculating projections..."):
-                projection = get_annual_dividend_projection(st.session_state.holdings)
-
-            if projection:
-                proj_df = pd.DataFrame([
-                    {
-                        "Month": f"{v['month_name'][:3]} {v['year']}",
-                        "Income": v["total"],
-                        "Payments": v["event_count"],
-                    }
-                    for k, v in projection.items()
-                ])
-
-                if proj_df["Income"].sum() > 0:
-                    fig_proj = go.Figure()
-                    fig_proj.add_trace(go.Bar(
-                        x=proj_df["Month"],
-                        y=proj_df["Income"],
-                        marker_color="#28a745",
-                        text=[f"${v:,.0f}" for v in proj_df["Income"]],
-                        textposition='outside',
-                        textfont=dict(color='white', size=10),
-                        hovertemplate='<b>%{x}</b><br>Expected Income: $%{y:,.2f}<br>Dividend Payments: %{customdata}<extra></extra>',
-                        customdata=proj_df["Payments"],
-                    ))
-                    fig_proj.update_layout(
-                        title="12-Month Dividend Income Projection",
-                        xaxis_title="Month",
-                        yaxis_title="Expected Income ($)",
-                        plot_bgcolor=CHART_FACE_COLOR,
-                        paper_bgcolor=CHART_BG_COLOR,
-                        font=dict(color='white'),
-                        xaxis=dict(tickangle=45, gridcolor='rgba(255,255,255,0.1)'),
-                        yaxis=dict(gridcolor='rgba(255,255,255,0.2)'),
-                        height=400,
-                        margin=dict(t=50, b=80),
-                    )
-                    st.plotly_chart(fig_proj, use_container_width=True)
-
-                    # Annual summary
-                    annual_total = proj_df["Income"].sum()
-                    st.info(
-                        f"**Projected Annual Dividend Income: ${annual_total:,.2f}** "
-                        f"(${annual_total/12:,.2f}/month average)"
-                    )
-
         st.markdown("---")
 
         # ══════════════════════════════════════════════
@@ -1695,52 +1360,6 @@ with tab_portfolio:
         st.info("Your watchlist is empty. Add stocks you're watching above.")
 
     # ══════════════════════════════════════════════
-    # NEWS FEED
-    # ══════════════════════════════════════════════
-    st.markdown("---")
-    st.markdown("### News Feed")
-    st.caption("Recent headlines for your holdings")
-
-    if st.session_state.holdings:
-        with st.spinner("Loading news..."):
-            news_items = get_portfolio_news(st.session_state.holdings, limit_per_stock=2)
-
-        if news_items:
-            # Filter selector
-            news_symbols = ["All"] + list(set(n.symbol for n in news_items))
-            news_filter = st.selectbox("Filter by", news_symbols, key="news_filter")
-
-            filtered_news = news_items if news_filter == "All" else [n for n in news_items if n.symbol == news_filter]
-
-            for i, news in enumerate(filtered_news[:15]):
-                time_ago = datetime.now() - news.published
-                if time_ago.days > 0:
-                    time_str = f"{time_ago.days}d ago"
-                elif time_ago.seconds > 3600:
-                    time_str = f"{time_ago.seconds // 3600}h ago"
-                else:
-                    time_str = f"{time_ago.seconds // 60}m ago"
-
-                # Get company color for the badge
-                badge_color = get_company_color(news.symbol)
-
-                st.markdown(
-                    f"""
-                    <div style='padding: 10px; margin: 5px 0; background-color: {CHART_FACE_COLOR}; border-radius: 5px; border-left: 4px solid {badge_color};'>
-                        <span style='background-color: {badge_color}; padding: 2px 8px; border-radius: 3px; font-size: 0.8em; font-weight: bold;'>{news.symbol}</span>
-                        <span style='color: #888; font-size: 0.8em; margin-left: 10px;'>{time_str} • {news.publisher}</span>
-                        <br>
-                        <a href='{news.link}' target='_blank' style='color: white; text-decoration: none; font-weight: 500;'>{news.title}</a>
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-        else:
-            st.info("No recent news found for your holdings")
-    else:
-        st.info("Add holdings to see news")
-
-    # ══════════════════════════════════════════════
     # IMPORT / EXPORT
     # ══════════════════════════════════════════════
     st.markdown("---")
@@ -1810,7 +1429,398 @@ with tab_portfolio:
 
 
 # ═════════════════════════════════════════════
-# TAB 1: Options Trading (Strategy + Chain + Greeks)
+# TAB 1: Calendar & News
+# ═════════════════════════════════════════════
+
+with tab_calendar:
+    st.subheader("Calendar & News")
+    st.caption("Dividend calendar, earnings dates, Fed events, and news for your holdings")
+
+    if not st.session_state.holdings:
+        st.info("Add holdings in the Portfolio Manager tab to see calendar events and news.")
+    else:
+        # ══════════════════════════════════════════════
+        # DIVIDEND & EARNINGS CALENDAR
+        # ══════════════════════════════════════════════
+        st.markdown("### Dividend & Earnings Calendar")
+
+        # Legend
+        legend_col1, legend_col2, legend_col3, legend_col4 = st.columns(4)
+        with legend_col1:
+            st.markdown(
+                "<span style='background-color: #d4edda; padding: 2px 8px; border-radius: 3px;'>"
+                "🟢 Dividend</span>",
+                unsafe_allow_html=True
+            )
+        with legend_col2:
+            st.markdown(
+                "<span style='background-color: #fff3cd; padding: 2px 8px; border-radius: 3px;'>"
+                "🟡 Earnings</span>",
+                unsafe_allow_html=True
+            )
+        with legend_col3:
+            st.markdown(
+                "<span style='background-color: #f8d7da; padding: 2px 8px; border-radius: 3px;'>"
+                "🔴 Fed/Econ</span>",
+                unsafe_allow_html=True
+            )
+        with legend_col4:
+            st.markdown(
+                "<span style='background-color: #cce5ff; padding: 2px 8px; border-radius: 3px;'>"
+                "🔵 Multiple</span>",
+                unsafe_allow_html=True
+            )
+
+        # Initialize calendar state
+        if "cal_year" not in st.session_state:
+            st.session_state.cal_year = datetime.now().year
+        if "cal_month" not in st.session_state:
+            st.session_state.cal_month = datetime.now().month
+
+        # Month navigation
+        nav_col1, nav_col2, nav_col3, nav_col4, nav_col5 = st.columns([1, 1, 2, 1, 1])
+
+        with nav_col1:
+            if st.button("◀ Prev", key="cal_prev_month"):
+                if st.session_state.cal_month == 1:
+                    st.session_state.cal_month = 12
+                    st.session_state.cal_year -= 1
+                else:
+                    st.session_state.cal_month -= 1
+                st.rerun()
+
+        with nav_col2:
+            if st.button("Today", key="cal_today"):
+                st.session_state.cal_year = datetime.now().year
+                st.session_state.cal_month = datetime.now().month
+                st.rerun()
+
+        with nav_col3:
+            month_name = cal_module.month_name[st.session_state.cal_month]
+            st.markdown(
+                f"<h3 style='text-align: center; margin: 0;'>{month_name} {st.session_state.cal_year}</h3>",
+                unsafe_allow_html=True
+            )
+
+        with nav_col5:
+            if st.button("Next ▶", key="cal_next_month"):
+                if st.session_state.cal_month == 12:
+                    st.session_state.cal_month = 1
+                    st.session_state.cal_year += 1
+                else:
+                    st.session_state.cal_month += 1
+                st.rerun()
+
+        # Build calendar data
+        with st.spinner("Loading calendar..."):
+            cal_data = build_combined_calendar(
+                st.session_state.holdings,
+                st.session_state.cal_year,
+                st.session_state.cal_month
+            )
+
+        # Month summary
+        sum_col1, sum_col2, sum_col3 = st.columns(3)
+        with sum_col1:
+            if cal_data["dividend_events"]:
+                total_div = sum(e.expected_income for e in cal_data["dividend_events"])
+                st.success(
+                    f"**Dividends: ${total_div:,.2f}** from "
+                    f"{len(cal_data['dividend_events'])} payment(s)"
+                )
+            else:
+                st.info("No dividends this month")
+        with sum_col2:
+            if cal_data["earnings_events"]:
+                confirmed = sum(1 for e in cal_data["earnings_events"] if e.is_confirmed)
+                estimated = len(cal_data["earnings_events"]) - confirmed
+                st.warning(
+                    f"**Earnings: {len(cal_data['earnings_events'])} report(s)** "
+                    f"({confirmed} confirmed, {estimated} estimated)"
+                )
+            else:
+                st.info("No earnings reports this month")
+        with sum_col3:
+            if cal_data.get("fed_events"):
+                high_importance = sum(1 for e in cal_data["fed_events"] if e.importance == "HIGH")
+                st.error(
+                    f"**Fed/Econ: {len(cal_data['fed_events'])} event(s)** "
+                    f"({high_importance} high importance)"
+                )
+            else:
+                st.info("No Fed/economic events this month")
+
+        # Calendar grid display
+        st.markdown("#### Calendar View")
+
+        # Header row
+        day_names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        header_cols = st.columns(7)
+        for i, day_name in enumerate(day_names):
+            with header_cols[i]:
+                st.markdown(f"**{day_name}**")
+
+        # Calendar weeks
+        for week in cal_data["calendar_grid"]:
+            week_cols = st.columns(7)
+            for i, day_data in enumerate(week):
+                with week_cols[i]:
+                    if day_data["day"] == 0:
+                        st.markdown("&nbsp;")
+                    else:
+                        day_num = day_data["day"]
+                        div_events = day_data.get("dividends", [])
+                        earn_events = day_data.get("earnings", [])
+                        fed_events = day_data.get("fed_events", [])
+
+                        has_div = len(div_events) > 0
+                        has_earn = len(earn_events) > 0
+                        has_fed = len(fed_events) > 0
+                        event_count = sum([has_div, has_earn, has_fed])
+
+                        if event_count >= 2:
+                            # Multiple event types - blue
+                            lines = []
+                            if has_div:
+                                div_details = [f"{e.symbol}: ${e.expected_income:.0f}" for e in div_events[:2]]
+                                if len(div_events) > 2:
+                                    div_details.append(f"+{len(div_events)-2} more")
+                                lines.append(f"💵 {', '.join(div_details)}")
+                            if has_earn:
+                                earn_symbols = ", ".join(e.symbol for e in earn_events[:2])
+                                lines.append(f"📊 {earn_symbols}")
+                            if has_fed:
+                                fed_types = ", ".join(e.event_type for e in fed_events[:2])
+                                lines.append(f"🏛 {fed_types}")
+
+                            content = "<br>".join(
+                                f"<span style='font-size: 0.65em; color: #000000; font-weight: bold;'>{l}</span>"
+                                for l in lines
+                            )
+                            st.markdown(
+                                f"<div style='background-color: #cce5ff; padding: 4px; "
+                                f"border-radius: 4px; text-align: center; min-height: 70px; color: #000000;'>"
+                                f"<strong style='color: #000000;'>{day_num}</strong><br>"
+                                f"{content}</div>",
+                                unsafe_allow_html=True
+                            )
+                        elif has_div:
+                            # Dividend only - green - show per-stock amounts
+                            total_income = sum(e.expected_income for e in div_events)
+                            div_lines = [f"{e.symbol}: ${e.expected_income:.2f}" for e in div_events[:3]]
+                            if len(div_events) > 3:
+                                div_lines.append(f"+{len(div_events)-3} more")
+                            div_content = "<br>".join(
+                                f"<span style='font-size: 0.65em; color: #000000;'>{l}</span>"
+                                for l in div_lines
+                            )
+                            st.markdown(
+                                f"<div style='background-color: #d4edda; padding: 4px; "
+                                f"border-radius: 4px; text-align: center; min-height: 70px; color: #000000;'>"
+                                f"<strong style='color: #000000;'>{day_num}</strong><br>"
+                                f"<span style='font-size: 0.7em; color: #000000; font-weight: bold;'>💵 ${total_income:,.0f}</span><br>"
+                                f"{div_content}"
+                                f"</div>",
+                                unsafe_allow_html=True
+                            )
+                        elif has_earn:
+                            # Earnings only - yellow
+                            symbols = ", ".join(e.symbol for e in earn_events)
+                            confirmed_mark = "✓" if all(e.is_confirmed for e in earn_events) else "?"
+                            st.markdown(
+                                f"<div style='background-color: #fff3cd; padding: 4px; "
+                                f"border-radius: 4px; text-align: center; min-height: 70px; color: #000000;'>"
+                                f"<strong style='color: #000000;'>{day_num}</strong><br>"
+                                f"<span style='font-size: 0.75em; color: #000000; font-weight: bold;'>📊 {symbols}</span><br>"
+                                f"<span style='font-size: 0.7em; color: #000000;'>{confirmed_mark}</span>"
+                                f"</div>",
+                                unsafe_allow_html=True
+                            )
+                        elif has_fed:
+                            # Fed/Economic event only - red
+                            event_types = ", ".join(e.event_type for e in fed_events)
+                            importance = "⚠" if any(e.importance == "HIGH" for e in fed_events) else ""
+                            st.markdown(
+                                f"<div style='background-color: #f8d7da; padding: 4px; "
+                                f"border-radius: 4px; text-align: center; min-height: 70px; color: #000000;'>"
+                                f"<strong style='color: #000000;'>{day_num}</strong><br>"
+                                f"<span style='font-size: 0.75em; color: #000000; font-weight: bold;'>🏛 {event_types}</span><br>"
+                                f"<span style='font-size: 0.7em; color: #000000;'>{importance}</span>"
+                                f"</div>",
+                                unsafe_allow_html=True
+                            )
+                        else:
+                            # Regular day
+                            st.markdown(
+                                f"<div style='padding: 4px; text-align: center; "
+                                f"min-height: 70px; color: #333333;'>{day_num}</div>",
+                                unsafe_allow_html=True
+                            )
+
+        # Detailed events - Dividends
+        if cal_data["dividend_events"]:
+            st.markdown("#### Dividend Details")
+            div_event_data = []
+            for event in cal_data["dividend_events"]:
+                div_event_data.append({
+                    "Ex-Date": event.ex_date.strftime("%b %d, %Y"),
+                    "Symbol": event.symbol,
+                    "Name": event.name[:20] + "..." if len(event.name) > 20 else event.name,
+                    "Frequency": event.frequency,
+                    "Amount/Share": f"${event.amount:.4f}",
+                    "Shares": f"{event.shares:,.0f}",
+                    "Expected Income": f"${event.expected_income:,.2f}",
+                })
+
+            st.dataframe(
+                pd.DataFrame(div_event_data),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        # Detailed events - Earnings
+        if cal_data["earnings_events"]:
+            st.markdown("#### Earnings Report Details")
+            earn_event_data = []
+            for event in cal_data["earnings_events"]:
+                earn_event_data.append({
+                    "Date": event.earnings_date.strftime("%b %d, %Y"),
+                    "Symbol": event.symbol,
+                    "Name": event.name[:20] + "..." if len(event.name) > 20 else event.name,
+                    "Status": "✓ Confirmed" if event.is_confirmed else "? Estimated",
+                    "EPS Est.": f"${event.eps_estimate:.2f}" if event.eps_estimate else "-",
+                })
+
+            st.dataframe(
+                pd.DataFrame(earn_event_data),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            st.caption(
+                "Note: Earnings dates marked as 'Estimated' are projections based on typical "
+                "quarterly reporting patterns. Confirm with official company announcements."
+            )
+
+        # Detailed events - Fed/Economic with clickable links
+        if cal_data.get("fed_events"):
+            st.markdown("#### Fed & Economic Events")
+
+            for event in cal_data["fed_events"]:
+                importance_badge = "🔴" if event.importance == "HIGH" else "🟡" if event.importance == "MEDIUM" else "🟢"
+
+                col_date, col_event, col_link = st.columns([2, 4, 1])
+                with col_date:
+                    st.markdown(f"**{event.event_date.strftime('%b %d, %Y')}**")
+                with col_event:
+                    st.markdown(f"{importance_badge} **{event.event_type}** - {event.description}")
+                with col_link:
+                    if event.url:
+                        st.markdown(f"[📎 Details]({event.url})")
+
+            st.caption(
+                "Fed/Economic events can cause significant market volatility. "
+                "Consider adjusting positions before high-importance events."
+            )
+
+        # 12-Month Projection Chart (Interactive Plotly)
+        st.markdown("#### 12-Month Dividend Income Projection")
+        with st.spinner("Calculating projections..."):
+            projection = get_annual_dividend_projection(st.session_state.holdings)
+
+        if projection:
+            proj_df = pd.DataFrame([
+                {
+                    "Month": f"{v['month_name'][:3]} {v['year']}",
+                    "Income": v["total"],
+                    "Payments": v["event_count"],
+                }
+                for k, v in projection.items()
+            ])
+
+            if proj_df["Income"].sum() > 0:
+                fig_proj = go.Figure()
+                fig_proj.add_trace(go.Bar(
+                    x=proj_df["Month"],
+                    y=proj_df["Income"],
+                    marker_color="#28a745",
+                    text=[f"${v:,.0f}" for v in proj_df["Income"]],
+                    textposition='outside',
+                    textfont=dict(color='white', size=10),
+                    hovertemplate='<b>%{x}</b><br>Expected Income: $%{y:,.2f}<br>Dividend Payments: %{customdata}<extra></extra>',
+                    customdata=proj_df["Payments"],
+                ))
+                fig_proj.update_layout(
+                    title="12-Month Dividend Income Projection",
+                    xaxis_title="Month",
+                    yaxis_title="Expected Income ($)",
+                    plot_bgcolor=CHART_FACE_COLOR,
+                    paper_bgcolor=CHART_BG_COLOR,
+                    font=dict(color='white'),
+                    xaxis=dict(tickangle=45, gridcolor='rgba(255,255,255,0.1)'),
+                    yaxis=dict(gridcolor='rgba(255,255,255,0.2)'),
+                    height=400,
+                    margin=dict(t=50, b=80),
+                )
+                st.plotly_chart(fig_proj, use_container_width=True)
+
+                # Annual summary
+                annual_total = proj_df["Income"].sum()
+                st.info(
+                    f"**Projected Annual Dividend Income: ${annual_total:,.2f}** "
+                    f"(${annual_total/12:,.2f}/month average)"
+                )
+
+        st.markdown("---")
+
+        # ══════════════════════════════════════════════
+        # NEWS FEED
+        # ══════════════════════════════════════════════
+        st.markdown("### News Feed")
+        st.caption("Recent headlines for your holdings - click any article to read more")
+
+        with st.spinner("Loading news..."):
+            news_items = get_portfolio_news(st.session_state.holdings, limit_per_stock=3)
+
+        if news_items:
+            # Filter selector
+            news_symbols = ["All"] + sorted(list(set(n.symbol for n in news_items)))
+            news_filter = st.selectbox("Filter by Stock", news_symbols, key="cal_news_filter")
+
+            filtered_news = news_items if news_filter == "All" else [n for n in news_items if n.symbol == news_filter]
+
+            for i, news in enumerate(filtered_news[:20]):
+                time_ago = datetime.now() - news.published
+                if time_ago.days > 0:
+                    time_str = f"{time_ago.days}d ago"
+                elif time_ago.seconds > 3600:
+                    time_str = f"{time_ago.seconds // 3600}h ago"
+                else:
+                    time_str = f"{time_ago.seconds // 60}m ago"
+
+                # Get company color for the badge
+                badge_color = get_company_color(news.symbol)
+
+                st.markdown(
+                    f"""
+                    <div style='padding: 12px; margin: 8px 0; background-color: {CHART_FACE_COLOR}; border-radius: 8px; border-left: 4px solid {badge_color};'>
+                        <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;'>
+                            <span style='background-color: {badge_color}; padding: 3px 10px; border-radius: 4px; font-size: 0.85em; font-weight: bold; color: white;'>{news.symbol}</span>
+                            <span style='color: #888; font-size: 0.8em;'>{time_str} • {news.publisher}</span>
+                        </div>
+                        <a href='{news.link}' target='_blank' style='color: #4da6ff; text-decoration: none; font-weight: 500; font-size: 1.05em; display: block;'>
+                            {news.title} ↗
+                        </a>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+        else:
+            st.info("No recent news found for your holdings")
+
+
+# ═════════════════════════════════════════════
+# TAB 2: Options Trading (Strategy + Chain + Greeks)
 # ═════════════════════════════════════════════
 
 with tab_options:
