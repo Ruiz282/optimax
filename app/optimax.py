@@ -48,6 +48,8 @@ from portfolio_manager import (
     get_monthly_dividend_totals,
     calculate_drip_projection,
     calculate_drip_vs_no_drip,
+    get_stock_news,
+    get_portfolio_news,
     POPULAR_STOCKS,
     POPULAR_ETFS,
     POPULAR_BOND_ETFS,
@@ -55,8 +57,12 @@ from portfolio_manager import (
     TICKER_DATABASE,
     FedEvent,
     WatchlistItem,
+    NewsItem,
 )
 import io
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
 
 # Set dark theme for matplotlib charts
 plt.style.use('dark_background')
@@ -64,6 +70,38 @@ CHART_BG_COLOR = '#2E2E2E'
 CHART_FACE_COLOR = '#3A3A3A'
 from dateutil.relativedelta import relativedelta
 import calendar as cal_module
+
+
+def get_company_color(symbol: str) -> str:
+    """Get a consistent color for a company symbol."""
+    # Known company brand colors
+    brand_colors = {
+        "AAPL": "#A2AAAD",
+        "MSFT": "#00A4EF",
+        "GOOGL": "#4285F4",
+        "GOOG": "#4285F4",
+        "AMZN": "#FF9900",
+        "META": "#0668E1",
+        "NVDA": "#76B900",
+        "TSLA": "#CC0000",
+        "JPM": "#003087",
+        "V": "#1A1F71",
+        "MA": "#EB001B",
+        "SPY": "#1E88E5",
+        "QQQ": "#76B900",
+        "SCHD": "#5A2D82",
+        "O": "#003399",
+        "VTI": "#C70000",
+        "VOO": "#C70000",
+    }
+
+    if symbol in brand_colors:
+        return brand_colors[symbol]
+
+    # Generate consistent color based on symbol hash
+    hash_val = sum(ord(c) for c in symbol)
+    hue = (hash_val * 137) % 360
+    return f"hsl({hue}, 65%, 45%)"
 
 # ─────────────────────────────────────────────
 # Page Config
@@ -901,35 +939,47 @@ with tab_portfolio:
                             else:
                                 st.metric("Days", f"{perf_data['days']}")
 
-                        # Price chart
-                        fig_stock, ax_stock = plt.subplots(figsize=(10, 5), facecolor=CHART_BG_COLOR)
-                        ax_stock.set_facecolor(CHART_FACE_COLOR)
-
+                        # Interactive Price chart with Plotly
                         hist = perf_data["history"]
                         color = "#00ff00" if perf_data['total_return'] >= 0 else "#ff4444"
-                        ax_stock.plot(hist["Date"], hist["Close"], color=color, linewidth=2)
-                        ax_stock.fill_between(hist["Date"], hist["Close"], alpha=0.2, color=color)
+
+                        fig_stock = go.Figure()
+
+                        # Main price line
+                        fig_stock.add_trace(go.Scatter(
+                            x=hist["Date"],
+                            y=hist["Close"],
+                            mode='lines',
+                            name='Price',
+                            line=dict(color=color, width=2),
+                            fill='tozeroy',
+                            fillcolor=color.replace('#', 'rgba(') + ', 0.1)' if color.startswith('#') else 'rgba(0,255,0,0.1)',
+                            hovertemplate='<b>%{x|%b %d, %Y}</b><br>Price: $%{y:.2f}<extra></extra>'
+                        ))
 
                         # Add cost basis line if available
                         if selected_holding.avg_cost > 0:
-                            ax_stock.axhline(
-                                selected_holding.avg_cost,
-                                color="#ffaa00",
-                                linestyle="--",
-                                alpha=0.8,
-                                label=f"Avg Cost: ${selected_holding.avg_cost:.2f}"
+                            fig_stock.add_hline(
+                                y=selected_holding.avg_cost,
+                                line_dash="dash",
+                                line_color="#ffaa00",
+                                annotation_text=f"Avg Cost: ${selected_holding.avg_cost:.2f}",
+                                annotation_position="right"
                             )
 
-                        ax_stock.set_xlabel("Date", color='white')
-                        ax_stock.set_ylabel("Price ($)", color='white')
-                        ax_stock.set_title(f"{selected_holding.name} ({selected_sym}) - {perf_period}", color='white')
-                        ax_stock.tick_params(colors='white')
-                        ax_stock.legend(facecolor=CHART_FACE_COLOR, labelcolor='white')
-                        ax_stock.grid(True, alpha=0.3)
-                        plt.xticks(rotation=45)
-                        fig_stock.tight_layout()
-                        st.pyplot(fig_stock)
-                        plt.close(fig_stock)
+                        fig_stock.update_layout(
+                            title=f"{selected_holding.name} ({selected_sym}) - {perf_period}",
+                            xaxis_title="Date",
+                            yaxis_title="Price ($)",
+                            template="plotly_dark",
+                            paper_bgcolor=CHART_BG_COLOR,
+                            plot_bgcolor=CHART_FACE_COLOR,
+                            hovermode='x unified',
+                            height=400,
+                            showlegend=False,
+                        )
+
+                        st.plotly_chart(fig_stock, use_container_width=True)
 
                         # Your position performance
                         if selected_holding.avg_cost > 0:
@@ -997,44 +1047,49 @@ with tab_portfolio:
                             delta_color="normal" if alpha >= 0 else "inverse"
                         )
 
-                # Portfolio performance chart
-                fig_port, ax_port = plt.subplots(figsize=(10, 5), facecolor=CHART_BG_COLOR)
-                ax_port.set_facecolor(CHART_FACE_COLOR)
-
+                # Interactive Portfolio performance chart with Plotly
                 hist = port_perf["history"]
                 port_color = "#00ff00" if port_perf['total_return'] >= 0 else "#ff4444"
 
-                ax_port.plot(
-                    hist["Date"],
-                    hist["Portfolio_Return"],
-                    color=port_color,
-                    linewidth=2,
-                    label=f"Your Portfolio ({port_perf['total_return']:+.2f}%)"
-                )
+                fig_port = go.Figure()
+
+                # Portfolio line
+                fig_port.add_trace(go.Scatter(
+                    x=hist["Date"],
+                    y=hist["Portfolio_Return"],
+                    mode='lines',
+                    name=f"Your Portfolio ({port_perf['total_return']:+.2f}%)",
+                    line=dict(color=port_color, width=2),
+                    hovertemplate='<b>%{x|%b %d, %Y}</b><br>Portfolio: %{y:+.2f}%<extra></extra>'
+                ))
 
                 # Add SPY benchmark
                 if "SPY_Return" in hist.columns:
                     spy_final = hist["SPY_Return"].iloc[-1]
-                    ax_port.plot(
-                        hist["Date"],
-                        hist["SPY_Return"],
-                        color="#888888",
-                        linewidth=2,
-                        linestyle="--",
-                        label=f"S&P 500 ({spy_final:+.2f}%)"
-                    )
+                    fig_port.add_trace(go.Scatter(
+                        x=hist["Date"],
+                        y=hist["SPY_Return"],
+                        mode='lines',
+                        name=f"S&P 500 ({spy_final:+.2f}%)",
+                        line=dict(color="#888888", width=2, dash='dash'),
+                        hovertemplate='<b>%{x|%b %d, %Y}</b><br>S&P 500: %{y:+.2f}%<extra></extra>'
+                    ))
 
-                ax_port.axhline(0, color="white", linewidth=0.5, alpha=0.5)
-                ax_port.set_xlabel("Date", color='white')
-                ax_port.set_ylabel("Return (%)", color='white')
-                ax_port.set_title(f"Portfolio Performance - {port_period}", color='white')
-                ax_port.tick_params(colors='white')
-                ax_port.legend(facecolor=CHART_FACE_COLOR, labelcolor='white', loc='upper left')
-                ax_port.grid(True, alpha=0.3)
-                plt.xticks(rotation=45)
-                fig_port.tight_layout()
-                st.pyplot(fig_port)
-                plt.close(fig_port)
+                fig_port.add_hline(y=0, line_color="white", line_width=0.5, opacity=0.5)
+
+                fig_port.update_layout(
+                    title=f"Portfolio Performance - {port_period}",
+                    xaxis_title="Date",
+                    yaxis_title="Return (%)",
+                    template="plotly_dark",
+                    paper_bgcolor=CHART_BG_COLOR,
+                    plot_bgcolor=CHART_FACE_COLOR,
+                    hovermode='x unified',
+                    height=400,
+                    legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
+                )
+
+                st.plotly_chart(fig_port, use_container_width=True)
             else:
                 st.warning("Could not calculate portfolio performance. Make sure you have holdings with valid data.")
 
@@ -1204,8 +1259,11 @@ with tab_portfolio:
                                 # Multiple event types - blue
                                 lines = []
                                 if has_div:
-                                    div_symbols = ", ".join(e.symbol for e in div_events[:2])
-                                    lines.append(f"💵 {div_symbols}")
+                                    # Show each stock with its dividend amount
+                                    div_details = [f"{e.symbol}: ${e.expected_income:.0f}" for e in div_events[:2]]
+                                    if len(div_events) > 2:
+                                        div_details.append(f"+{len(div_events)-2} more")
+                                    lines.append(f"💵 {', '.join(div_details)}")
                                 if has_earn:
                                     earn_symbols = ", ".join(e.symbol for e in earn_events[:2])
                                     lines.append(f"📊 {earn_symbols}")
@@ -1225,15 +1283,22 @@ with tab_portfolio:
                                     unsafe_allow_html=True
                                 )
                             elif has_div:
-                                # Dividend only - green
+                                # Dividend only - green - show per-stock amounts
                                 total_income = sum(e.expected_income for e in div_events)
-                                symbols = ", ".join(e.symbol for e in div_events)
+                                # Show each stock with amount
+                                div_lines = [f"{e.symbol}: ${e.expected_income:.2f}" for e in div_events[:3]]
+                                if len(div_events) > 3:
+                                    div_lines.append(f"+{len(div_events)-3} more")
+                                div_content = "<br>".join(
+                                    f"<span style='font-size: 0.65em; color: #000000;'>{l}</span>"
+                                    for l in div_lines
+                                )
                                 st.markdown(
                                     f"<div style='background-color: #d4edda; padding: 4px; "
                                     f"border-radius: 4px; text-align: center; min-height: 70px; color: #000000;'>"
                                     f"<strong style='color: #000000;'>{day_num}</strong><br>"
-                                    f"<span style='font-size: 0.75em; color: #000000; font-weight: bold;'>💵 {symbols}</span><br>"
-                                    f"<span style='font-size: 0.7em; color: #000000; font-weight: bold;'>${total_income:,.0f}</span>"
+                                    f"<span style='font-size: 0.7em; color: #000000; font-weight: bold;'>💵 ${total_income:,.0f}</span><br>"
+                                    f"{div_content}"
                                     f"</div>",
                                     unsafe_allow_html=True
                                 )
@@ -1316,30 +1381,28 @@ with tab_portfolio:
                     "quarterly reporting patterns. Confirm with official company announcements."
                 )
 
-            # Detailed events - Fed/Economic
+            # Detailed events - Fed/Economic with clickable links
             if cal_data.get("fed_events"):
                 st.markdown("#### Fed & Economic Events")
-                fed_event_data = []
-                for event in cal_data["fed_events"]:
-                    fed_event_data.append({
-                        "Date": event.event_date.strftime("%b %d, %Y"),
-                        "Event": event.event_type,
-                        "Description": event.description,
-                        "Importance": f"{'⚠ ' if event.importance == 'HIGH' else ''}{event.importance}",
-                    })
 
-                st.dataframe(
-                    pd.DataFrame(fed_event_data),
-                    use_container_width=True,
-                    hide_index=True,
-                )
+                for event in cal_data["fed_events"]:
+                    importance_badge = "🔴" if event.importance == "HIGH" else "🟡" if event.importance == "MEDIUM" else "🟢"
+
+                    col_date, col_event, col_link = st.columns([2, 4, 1])
+                    with col_date:
+                        st.markdown(f"**{event.event_date.strftime('%b %d, %Y')}**")
+                    with col_event:
+                        st.markdown(f"{importance_badge} **{event.event_type}** - {event.description}")
+                    with col_link:
+                        if event.url:
+                            st.markdown(f"[📎 Details]({event.url})")
 
                 st.caption(
                     "Fed/Economic events can cause significant market volatility. "
                     "Consider adjusting positions before high-importance events."
                 )
 
-            # 12-Month Projection Chart
+            # 12-Month Projection Chart (Interactive Plotly)
             st.markdown("#### 12-Month Dividend Income Projection")
             with st.spinner("Calculating projections..."):
                 projection = get_annual_dividend_projection(st.session_state.holdings)
@@ -1355,31 +1418,30 @@ with tab_portfolio:
                 ])
 
                 if proj_df["Income"].sum() > 0:
-                    fig_proj, ax_proj = plt.subplots(figsize=(10, 4), facecolor=CHART_BG_COLOR)
-                    ax_proj.set_facecolor(CHART_FACE_COLOR)
-                    bars = ax_proj.bar(proj_df["Month"], proj_df["Income"], color="#28a745")
-                    ax_proj.set_xlabel("Month", color='white')
-                    ax_proj.set_ylabel("Expected Income ($)", color='white')
-                    ax_proj.set_title("12-Month Dividend Income Projection", color='white')
-                    ax_proj.tick_params(colors='white')
-                    plt.xticks(rotation=45, ha="right")
-
-                    for bar, val in zip(bars, proj_df["Income"]):
-                        if val > 0:
-                            ax_proj.text(
-                                bar.get_x() + bar.get_width() / 2,
-                                bar.get_height() + 5,
-                                f"${val:,.0f}",
-                                ha="center",
-                                va="bottom",
-                                fontsize=8,
-                                color='white'
-                            )
-
-                    ax_proj.grid(True, alpha=0.3, axis="y")
-                    fig_proj.tight_layout()
-                    st.pyplot(fig_proj)
-                    plt.close(fig_proj)
+                    fig_proj = go.Figure()
+                    fig_proj.add_trace(go.Bar(
+                        x=proj_df["Month"],
+                        y=proj_df["Income"],
+                        marker_color="#28a745",
+                        text=[f"${v:,.0f}" for v in proj_df["Income"]],
+                        textposition='outside',
+                        textfont=dict(color='white', size=10),
+                        hovertemplate='<b>%{x}</b><br>Expected Income: $%{y:,.2f}<br>Dividend Payments: %{customdata}<extra></extra>',
+                        customdata=proj_df["Payments"],
+                    ))
+                    fig_proj.update_layout(
+                        title="12-Month Dividend Income Projection",
+                        xaxis_title="Month",
+                        yaxis_title="Expected Income ($)",
+                        plot_bgcolor=CHART_FACE_COLOR,
+                        paper_bgcolor=CHART_BG_COLOR,
+                        font=dict(color='white'),
+                        xaxis=dict(tickangle=45, gridcolor='rgba(255,255,255,0.1)'),
+                        yaxis=dict(gridcolor='rgba(255,255,255,0.2)'),
+                        height=400,
+                        margin=dict(t=50, b=80),
+                    )
+                    st.plotly_chart(fig_proj, use_container_width=True)
 
                     # Annual summary
                     annual_total = proj_df["Income"].sum()
@@ -1404,22 +1466,33 @@ with tab_portfolio:
                 div_history = get_dividend_payment_history(st.session_state.holdings, years=3)
 
             if not div_history.empty:
-                # Monthly totals chart
+                # Monthly totals chart (Interactive Plotly)
                 monthly_divs = get_monthly_dividend_totals(st.session_state.holdings, years=2)
 
                 if not monthly_divs.empty:
-                    fig_div_hist, ax_div_hist = plt.subplots(figsize=(10, 4), facecolor=CHART_BG_COLOR)
-                    ax_div_hist.set_facecolor(CHART_FACE_COLOR)
-                    bars = ax_div_hist.bar(monthly_divs["Month"], monthly_divs["Total"], color="#28a745")
-                    ax_div_hist.set_xlabel("Month", color='white')
-                    ax_div_hist.set_ylabel("Dividends Received ($)", color='white')
-                    ax_div_hist.set_title("Historical Dividend Income", color='white')
-                    ax_div_hist.tick_params(colors='white')
-                    plt.xticks(rotation=45, ha="right")
-                    ax_div_hist.grid(True, alpha=0.3, axis="y")
-                    fig_div_hist.tight_layout()
-                    st.pyplot(fig_div_hist)
-                    plt.close(fig_div_hist)
+                    fig_div_hist = go.Figure()
+                    fig_div_hist.add_trace(go.Bar(
+                        x=monthly_divs["Month"],
+                        y=monthly_divs["Total"],
+                        marker_color="#28a745",
+                        text=[f"${v:,.0f}" for v in monthly_divs["Total"]],
+                        textposition='outside',
+                        textfont=dict(color='white', size=9),
+                        hovertemplate='<b>%{x}</b><br>Dividends: $%{y:,.2f}<extra></extra>',
+                    ))
+                    fig_div_hist.update_layout(
+                        title="Historical Dividend Income",
+                        xaxis_title="Month",
+                        yaxis_title="Dividends Received ($)",
+                        plot_bgcolor=CHART_FACE_COLOR,
+                        paper_bgcolor=CHART_BG_COLOR,
+                        font=dict(color='white'),
+                        xaxis=dict(tickangle=45, gridcolor='rgba(255,255,255,0.1)'),
+                        yaxis=dict(gridcolor='rgba(255,255,255,0.2)'),
+                        height=400,
+                        margin=dict(t=50, b=80),
+                    )
+                    st.plotly_chart(fig_div_hist, use_container_width=True)
 
                 # Summary metrics
                 total_received = div_history["Total"].sum()
@@ -1490,32 +1563,51 @@ with tab_portfolio:
                         delta_color="normal"
                     )
 
-                # Chart
-                fig_drip, ax_drip = plt.subplots(figsize=(10, 5), facecolor=CHART_BG_COLOR)
-                ax_drip.set_facecolor(CHART_FACE_COLOR)
-
+                # Chart (Interactive Plotly)
                 drip_df = drip_result["drip"]
                 no_drip_df = drip_result["no_drip"]
+                no_drip_total = no_drip_df["Portfolio Value"] + no_drip_df["Cumulative Dividends"]
 
-                ax_drip.plot(drip_df["Year"], drip_df["Portfolio Value"],
-                            color="#00ff00", linewidth=2, label="With DRIP")
-                ax_drip.plot(no_drip_df["Year"],
-                            no_drip_df["Portfolio Value"] + no_drip_df["Cumulative Dividends"],
-                            color="#ff6666", linewidth=2, linestyle="--", label="Without DRIP")
+                fig_drip = go.Figure()
 
-                ax_drip.fill_between(drip_df["Year"], drip_df["Portfolio Value"],
-                                    no_drip_df["Portfolio Value"] + no_drip_df["Cumulative Dividends"],
-                                    alpha=0.2, color="green")
+                # With DRIP line
+                fig_drip.add_trace(go.Scatter(
+                    x=drip_df["Year"],
+                    y=drip_df["Portfolio Value"],
+                    mode='lines',
+                    name='With DRIP',
+                    line=dict(color='#00ff00', width=3),
+                    fill='tonexty',
+                    fillcolor='rgba(0, 255, 0, 0.1)',
+                    hovertemplate='<b>Year %{x}</b><br>With DRIP: $%{y:,.0f}<br>Shares: %{customdata:,.2f}<extra></extra>',
+                    customdata=drip_df["Shares"],
+                ))
 
-                ax_drip.set_xlabel("Years", color='white')
-                ax_drip.set_ylabel("Total Value ($)", color='white')
-                ax_drip.set_title(f"{drip_symbol} - DRIP vs No DRIP Projection", color='white')
-                ax_drip.tick_params(colors='white')
-                ax_drip.legend(facecolor=CHART_FACE_COLOR, labelcolor='white')
-                ax_drip.grid(True, alpha=0.3)
-                fig_drip.tight_layout()
-                st.pyplot(fig_drip)
-                plt.close(fig_drip)
+                # Without DRIP line (add first so fill works correctly)
+                fig_drip.add_trace(go.Scatter(
+                    x=no_drip_df["Year"],
+                    y=no_drip_total,
+                    mode='lines',
+                    name='Without DRIP',
+                    line=dict(color='#ff6666', width=3, dash='dash'),
+                    hovertemplate='<b>Year %{x}</b><br>Without DRIP: $%{y:,.0f}<br>Cash Dividends: $%{customdata:,.0f}<extra></extra>',
+                    customdata=no_drip_df["Cumulative Dividends"],
+                ))
+
+                fig_drip.update_layout(
+                    title=f"{drip_symbol} - DRIP vs No DRIP Projection",
+                    xaxis_title="Years",
+                    yaxis_title="Total Value ($)",
+                    plot_bgcolor=CHART_FACE_COLOR,
+                    paper_bgcolor=CHART_BG_COLOR,
+                    font=dict(color='white'),
+                    xaxis=dict(gridcolor='rgba(255,255,255,0.1)'),
+                    yaxis=dict(gridcolor='rgba(255,255,255,0.2)', tickformat='$,.0f'),
+                    height=450,
+                    legend=dict(bgcolor=CHART_FACE_COLOR, font=dict(color='white')),
+                    hovermode='x unified',
+                )
+                st.plotly_chart(fig_drip, use_container_width=True)
 
                 # Shares growth
                 st.caption(f"Shares: {drip_holding.shares:,.2f} → {drip_result['drip_final_shares']:,.2f} with DRIP")
@@ -1602,6 +1694,52 @@ with tab_portfolio:
                         st.rerun()
     else:
         st.info("Your watchlist is empty. Add stocks you're watching above.")
+
+    # ══════════════════════════════════════════════
+    # NEWS FEED
+    # ══════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("### News Feed")
+    st.caption("Recent headlines for your holdings")
+
+    if st.session_state.holdings:
+        with st.spinner("Loading news..."):
+            news_items = get_portfolio_news(st.session_state.holdings, limit_per_stock=2)
+
+        if news_items:
+            # Filter selector
+            news_symbols = ["All"] + list(set(n.symbol for n in news_items))
+            news_filter = st.selectbox("Filter by", news_symbols, key="news_filter")
+
+            filtered_news = news_items if news_filter == "All" else [n for n in news_items if n.symbol == news_filter]
+
+            for i, news in enumerate(filtered_news[:15]):
+                time_ago = datetime.now() - news.published
+                if time_ago.days > 0:
+                    time_str = f"{time_ago.days}d ago"
+                elif time_ago.seconds > 3600:
+                    time_str = f"{time_ago.seconds // 3600}h ago"
+                else:
+                    time_str = f"{time_ago.seconds // 60}m ago"
+
+                # Get company color for the badge
+                badge_color = get_company_color(news.symbol)
+
+                st.markdown(
+                    f"""
+                    <div style='padding: 10px; margin: 5px 0; background-color: {CHART_FACE_COLOR}; border-radius: 5px; border-left: 4px solid {badge_color};'>
+                        <span style='background-color: {badge_color}; padding: 2px 8px; border-radius: 3px; font-size: 0.8em; font-weight: bold;'>{news.symbol}</span>
+                        <span style='color: #888; font-size: 0.8em; margin-left: 10px;'>{time_str} • {news.publisher}</span>
+                        <br>
+                        <a href='{news.link}' target='_blank' style='color: white; text-decoration: none; font-weight: 500;'>{news.title}</a>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+        else:
+            st.info("No recent news found for your holdings")
+    else:
+        st.info("Add holdings to see news")
 
     # ══════════════════════════════════════════════
     # IMPORT / EXPORT

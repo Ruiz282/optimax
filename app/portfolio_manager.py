@@ -613,6 +613,64 @@ def calculate_drip_projection(
     return pd.DataFrame(results)
 
 
+# ─────────────────────────────────────────────
+# News Feed Functions
+# ─────────────────────────────────────────────
+
+@dataclass
+class NewsItem:
+    """A news article."""
+    title: str
+    publisher: str
+    link: str
+    published: datetime
+    symbol: str
+    summary: Optional[str] = None
+
+
+def get_stock_news(symbol: str, limit: int = 5) -> List[NewsItem]:
+    """Fetch recent news for a stock."""
+    try:
+        ticker = yf.Ticker(symbol)
+        news = ticker.news
+
+        if not news:
+            return []
+
+        items = []
+        for article in news[:limit]:
+            try:
+                pub_time = datetime.fromtimestamp(article.get("providerPublishTime", 0))
+                items.append(NewsItem(
+                    title=article.get("title", ""),
+                    publisher=article.get("publisher", ""),
+                    link=article.get("link", ""),
+                    published=pub_time,
+                    symbol=symbol,
+                    summary=article.get("summary", None),
+                ))
+            except Exception:
+                continue
+
+        return items
+    except Exception:
+        return []
+
+
+def get_portfolio_news(holdings: List[Holding], limit_per_stock: int = 3) -> List[NewsItem]:
+    """Fetch recent news for all holdings."""
+    all_news = []
+
+    for h in holdings:
+        news = get_stock_news(h.symbol, limit_per_stock)
+        all_news.extend(news)
+
+    # Sort by date, most recent first
+    all_news.sort(key=lambda x: x.published, reverse=True)
+
+    return all_news
+
+
 def calculate_drip_vs_no_drip(
     initial_investment: float,
     share_price: float,
@@ -1942,6 +2000,7 @@ class FedEvent:
     event_type: str  # "FOMC", "Jobs Report", "CPI", "GDP", etc.
     description: str
     importance: str  # "HIGH", "MEDIUM", "LOW"
+    url: str = ""  # Link to more information
 
 
 # Federal Reserve FOMC meeting dates for 2024-2026
@@ -1997,6 +2056,7 @@ def get_fed_and_econ_events(target_year: int, target_month: int) -> List[FedEven
                 event_type="FOMC",
                 description=f"Federal Reserve {event_type}",
                 importance=importance,
+                url="https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
             ))
 
     # Add recurring economic events
@@ -2009,6 +2069,7 @@ def get_fed_and_econ_events(target_year: int, target_month: int) -> List[FedEven
         event_type="Jobs Report",
         description="Non-Farm Payrolls & Unemployment",
         importance="HIGH",
+        url="https://www.bls.gov/news.release/empsit.toc.htm",
     ))
 
     # CPI - Usually around 10th-13th
@@ -2025,6 +2086,7 @@ def get_fed_and_econ_events(target_year: int, target_month: int) -> List[FedEven
             event_type="CPI",
             description="Consumer Price Index Report",
             importance="HIGH",
+            url="https://www.bls.gov/cpi/",
         ))
     except ValueError:
         pass
@@ -2036,6 +2098,7 @@ def get_fed_and_econ_events(target_year: int, target_month: int) -> List[FedEven
         event_type="OpEx",
         description="Monthly Options Expiration",
         importance="MEDIUM",
+        url="https://www.cboe.com/tradable_products/options_on_single_stocks/",
     ))
 
     # Quarterly events (GDP, etc.)
@@ -2053,6 +2116,7 @@ def get_fed_and_econ_events(target_year: int, target_month: int) -> List[FedEven
                 event_type="GDP",
                 description="Quarterly GDP Report",
                 importance="HIGH",
+                url="https://www.bea.gov/data/gdp/gross-domestic-product",
             ))
         except ValueError:
             pass
