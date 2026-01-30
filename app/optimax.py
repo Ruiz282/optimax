@@ -36,7 +36,6 @@ from portfolio_manager import (
     build_combined_calendar,
     get_annual_dividend_projection,
     search_tickers,
-    get_company_color,
     get_stock_performance,
     get_portfolio_performance,
     create_watchlist_item,
@@ -74,6 +73,7 @@ import calendar as cal_module
 
 def get_company_color(symbol: str) -> str:
     """Get a consistent color for a company symbol."""
+    import colorsys
     # Known company brand colors
     brand_colors = {
         "AAPL": "#A2AAAD",
@@ -98,10 +98,11 @@ def get_company_color(symbol: str) -> str:
     if symbol in brand_colors:
         return brand_colors[symbol]
 
-    # Generate consistent color based on symbol hash
+    # Generate consistent hex color based on symbol hash (matplotlib compatible)
     hash_val = sum(ord(c) for c in symbol)
-    hue = (hash_val * 137) % 360
-    return f"hsl({hue}, 65%, 45%)"
+    hue = ((hash_val * 137) % 360) / 360.0
+    r, g, b = colorsys.hls_to_rgb(hue, 0.45, 0.65)
+    return f"#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}"
 
 # ─────────────────────────────────────────────
 # Page Config
@@ -319,11 +320,9 @@ with st.spinner(f"Loading options chain for {selected_exp}..."):
 # Main Tabs
 # ─────────────────────────────────────────────
 
-tab_portfolio, tab_recommend, tab_chain, tab_greeks, tab_entropy = st.tabs([
+tab_portfolio, tab_options, tab_entropy = st.tabs([
     "Portfolio Manager",
-    "Strategy Recommender",
-    "Options Chain",
-    "Greeks & IV",
+    "Options Trading",
     "Entropy Analysis",
 ])
 
@@ -1811,11 +1810,21 @@ with tab_portfolio:
 
 
 # ═════════════════════════════════════════════
-# TAB 1: Strategy Recommender + Trade Cards
+# TAB 1: Options Trading (Strategy + Chain + Greeks)
 # ═════════════════════════════════════════════
 
-with tab_recommend:
-    st.subheader("Recommended Strategies")
+with tab_options:
+    st.subheader("Options Trading")
+
+    # Create subtabs for options trading
+    options_subtab1, options_subtab2, options_subtab3 = st.tabs([
+        "Strategy Recommender",
+        "Options Chain",
+        "Greeks & IV"
+    ])
+
+    with options_subtab1:
+        st.markdown("#### Recommended Strategies")
 
     regime_str = f" | Regime: **{entropy_signal.regime}**" if entropy_signal else ""
     st.caption(
@@ -2023,186 +2032,186 @@ with tab_recommend:
                                 f"**Complexity:** {'Simple' if strat.complexity == 1 else 'Intermediate' if strat.complexity == 2 else 'Advanced'}")
 
 
-# ═════════════════════════════════════════════
-# TAB 2: Options Chain Explorer
-# ═════════════════════════════════════════════
+    # ═════════════════════════════════════════════
+    # SUBTAB 2: Options Chain Explorer
+    # ═════════════════════════════════════════════
 
-with tab_chain:
-    st.subheader("Options Chain Explorer")
+    with options_subtab2:
+        st.markdown("#### Options Chain Explorer")
 
-    filter_col1, filter_col2, filter_col3 = st.columns(3)
-    with filter_col1:
-        moneyness_filter = st.multiselect(
-            "Moneyness", ["ITM", "ATM", "OTM"],
-            default=["ITM", "ATM", "OTM"], key="chain_moneyness",
-        )
-    with filter_col2:
-        min_oi = st.number_input("Min Open Interest", value=0, min_value=0,
-                                  step=10, key="chain_oi")
-    with filter_col3:
-        min_vol = st.number_input("Min Volume", value=0, min_value=0,
-                                   step=10, key="chain_vol")
+        filter_col1, filter_col2, filter_col3 = st.columns(3)
+        with filter_col1:
+            moneyness_filter = st.multiselect(
+                "Moneyness", ["ITM", "ATM", "OTM"],
+                default=["ITM", "ATM", "OTM"], key="chain_moneyness",
+            )
+        with filter_col2:
+            min_oi = st.number_input("Min Open Interest", value=0, min_value=0,
+                                      step=10, key="chain_oi")
+        with filter_col3:
+            min_vol = st.number_input("Min Volume", value=0, min_value=0,
+                                       step=10, key="chain_vol")
 
-    filtered = chain_df[chain_df["moneyness_label"].isin(moneyness_filter)]
-    if min_oi > 0:
-        filtered = filtered[filtered["openInterest"].fillna(0) >= min_oi]
-    if min_vol > 0:
-        filtered = filtered[filtered["volume"].fillna(0) >= min_vol]
+        filtered = chain_df[chain_df["moneyness_label"].isin(moneyness_filter)]
+        if min_oi > 0:
+            filtered = filtered[filtered["openInterest"].fillna(0) >= min_oi]
+        if min_vol > 0:
+            filtered = filtered[filtered["volume"].fillna(0) >= min_vol]
 
-    display_cols = [
-        "strike", "bid", "ask", "midPrice", "lastPrice", "bsPrice",
-        "impliedVolatility", "delta", "gamma", "theta", "vega",
-        "openInterest", "volume", "moneyness_label",
-    ]
-
-    def format_chain(df):
-        display = df[display_cols].copy()
-        display.columns = [
-            "Strike", "Bid", "Ask", "Mid", "Last", "BS Price",
-            "IV", "Delta", "Gamma", "Theta", "Vega", "OI", "Vol", "Money",
+        display_cols = [
+            "strike", "bid", "ask", "midPrice", "lastPrice", "bsPrice",
+            "impliedVolatility", "delta", "gamma", "theta", "vega",
+            "openInterest", "volume", "moneyness_label",
         ]
-        for col in ["Bid", "Ask", "Mid", "Last", "BS Price"]:
-            display[col] = display[col].apply(
-                lambda x: f"${x:.2f}" if pd.notna(x) else "-")
-        display["IV"] = display["IV"].apply(
-            lambda x: f"{x:.1%}" if pd.notna(x) else "-")
-        display["Delta"] = display["Delta"].apply(
-            lambda x: f"{x:.3f}" if pd.notna(x) else "-")
-        display["Gamma"] = display["Gamma"].apply(
-            lambda x: f"{x:.4f}" if pd.notna(x) else "-")
-        display["Theta"] = display["Theta"].apply(
-            lambda x: f"{x:.3f}" if pd.notna(x) else "-")
-        display["Vega"] = display["Vega"].apply(
-            lambda x: f"{x:.3f}" if pd.notna(x) else "-")
-        display["Strike"] = display["Strike"].apply(lambda x: f"${x:.2f}")
-        display["OI"] = display["OI"].apply(
-            lambda x: f"{int(x):,}" if pd.notna(x) else "-")
-        display["Vol"] = display["Vol"].apply(
-            lambda x: f"{int(x):,}" if pd.notna(x) else "-")
-        return display
 
-    chain_tab_calls, chain_tab_puts = st.tabs(["Calls", "Puts"])
+        def format_chain(df):
+            display = df[display_cols].copy()
+            display.columns = [
+                "Strike", "Bid", "Ask", "Mid", "Last", "BS Price",
+                "IV", "Delta", "Gamma", "Theta", "Vega", "OI", "Vol", "Money",
+            ]
+            for col in ["Bid", "Ask", "Mid", "Last", "BS Price"]:
+                display[col] = display[col].apply(
+                    lambda x: f"${x:.2f}" if pd.notna(x) else "-")
+            display["IV"] = display["IV"].apply(
+                lambda x: f"{x:.1%}" if pd.notna(x) else "-")
+            display["Delta"] = display["Delta"].apply(
+                lambda x: f"{x:.3f}" if pd.notna(x) else "-")
+            display["Gamma"] = display["Gamma"].apply(
+                lambda x: f"{x:.4f}" if pd.notna(x) else "-")
+            display["Theta"] = display["Theta"].apply(
+                lambda x: f"{x:.3f}" if pd.notna(x) else "-")
+            display["Vega"] = display["Vega"].apply(
+                lambda x: f"{x:.3f}" if pd.notna(x) else "-")
+            display["Strike"] = display["Strike"].apply(lambda x: f"${x:.2f}")
+            display["OI"] = display["OI"].apply(
+                lambda x: f"{int(x):,}" if pd.notna(x) else "-")
+            display["Vol"] = display["Vol"].apply(
+                lambda x: f"{int(x):,}" if pd.notna(x) else "-")
+            return display
 
-    with chain_tab_calls:
-        calls = filtered[filtered["optionType"] == "call"].sort_values("strike")
-        if calls.empty:
-            st.warning("No calls match your filters.")
-        else:
-            st.caption(f"{len(calls)} contracts | Spot: ${spot:.2f} | DTE: {chain_df['dte'].iloc[0]}d")
-            st.dataframe(format_chain(calls), use_container_width=True,
-                         hide_index=True, height=min(500, 35 * len(calls) + 38))
+        chain_tab_calls, chain_tab_puts = st.tabs(["Calls", "Puts"])
 
-    with chain_tab_puts:
-        puts = filtered[filtered["optionType"] == "put"].sort_values("strike")
-        if puts.empty:
-            st.warning("No puts match your filters.")
-        else:
-            st.caption(f"{len(puts)} contracts | Spot: ${spot:.2f} | DTE: {chain_df['dte'].iloc[0]}d")
-            st.dataframe(format_chain(puts), use_container_width=True,
-                         hide_index=True, height=min(500, 35 * len(puts) + 38))
+        with chain_tab_calls:
+            calls = filtered[filtered["optionType"] == "call"].sort_values("strike")
+            if calls.empty:
+                st.warning("No calls match your filters.")
+            else:
+                st.caption(f"{len(calls)} contracts | Spot: ${spot:.2f} | DTE: {chain_df['dte'].iloc[0]}d")
+                st.dataframe(format_chain(calls), use_container_width=True,
+                             hide_index=True, height=min(500, 35 * len(calls) + 38))
+
+        with chain_tab_puts:
+            puts = filtered[filtered["optionType"] == "put"].sort_values("strike")
+            if puts.empty:
+                st.warning("No puts match your filters.")
+            else:
+                st.caption(f"{len(puts)} contracts | Spot: ${spot:.2f} | DTE: {chain_df['dte'].iloc[0]}d")
+                st.dataframe(format_chain(puts), use_container_width=True,
+                             hide_index=True, height=min(500, 35 * len(puts) + 38))
+
+
+    # ═════════════════════════════════════════════
+    # SUBTAB 3: Greeks & IV
+    # ═════════════════════════════════════════════
+
+    with options_subtab3:
+        st.markdown("#### Greeks Across Strikes")
+
+        liquid = chain_df[chain_df["openInterest"].fillna(0) > 10].copy()
+        if liquid.empty:
+            liquid = chain_df.copy()
+        liquid = liquid[(liquid["moneyness"] >= 0.80) & (liquid["moneyness"] <= 1.20)]
+
+        greek_type = st.selectbox("Select Greek", ["Delta", "Gamma", "Theta", "Vega"],
+                                   index=0, key="greek_select")
+        greek_col = greek_type.lower()
+
+        fig, ax = plt.subplots(figsize=(10, 5), facecolor=CHART_BG_COLOR)
+        ax.set_facecolor(CHART_FACE_COLOR)
+        calls_g = liquid[liquid["optionType"] == "call"].sort_values("strike")
+        puts_g = liquid[liquid["optionType"] == "put"].sort_values("strike")
+
+        if not calls_g.empty:
+            ax.plot(calls_g["strike"], calls_g[greek_col], "b-o", markersize=3,
+                    label=f"Call {greek_type}", linewidth=1.5)
+        if not puts_g.empty:
+            ax.plot(puts_g["strike"], puts_g[greek_col], "r-o", markersize=3,
+                    label=f"Put {greek_type}", linewidth=1.5)
+
+        ax.axvline(spot, color="gray", linestyle="--", alpha=0.7, label=f"Spot ${spot:.2f}")
+        ax.set_xlabel("Strike Price", color='white')
+        ax.set_ylabel(greek_type, color='white')
+        ax.set_title(f"{symbol} — {greek_type} by Strike ({selected_exp})", color='white')
+        ax.tick_params(colors='white')
+        ax.legend(facecolor=CHART_FACE_COLOR, labelcolor='white')
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        st.pyplot(fig)
+        plt.close(fig)
+
+        # IV Smile
+        st.subheader("Volatility Smile")
+        fig2, ax2 = plt.subplots(figsize=(10, 5), facecolor=CHART_BG_COLOR)
+        ax2.set_facecolor(CHART_FACE_COLOR)
+        if not calls_g.empty:
+            ax2.plot(calls_g["strike"], calls_g["impliedVolatility"] * 100,
+                     "b-o", markersize=3, label="Call IV", linewidth=1.5)
+        if not puts_g.empty:
+            ax2.plot(puts_g["strike"], puts_g["impliedVolatility"] * 100,
+                     "r-o", markersize=3, label="Put IV", linewidth=1.5)
+        ax2.axvline(spot, color="gray", linestyle="--", alpha=0.7, label=f"Spot ${spot:.2f}")
+        ax2.set_xlabel("Strike Price", color='white')
+        ax2.set_ylabel("Implied Volatility (%)", color='white')
+        ax2.set_title(f"{symbol} — Volatility Smile ({selected_exp})", color='white')
+        ax2.tick_params(colors='white')
+        ax2.legend(facecolor=CHART_FACE_COLOR, labelcolor='white')
+        ax2.grid(True, alpha=0.3)
+        fig2.tight_layout()
+        st.pyplot(fig2)
+        plt.close(fig2)
+
+        # IV vs RV
+        if iv_data:
+            st.subheader("Implied vs. Realized Volatility")
+            vol_data = {
+                "Metric": ["Current ATM IV", "30d RV", "60d RV", "90d RV"],
+                "Value": [iv_data["current_iv"], iv_data["rv_30"],
+                          iv_data["rv_60"], iv_data["rv_90"]],
+            }
+            vol_df = pd.DataFrame(vol_data)
+
+            fig3, ax3 = plt.subplots(figsize=(8, 4), facecolor=CHART_BG_COLOR)
+            ax3.set_facecolor(CHART_FACE_COLOR)
+            colors = ["#ff7f0e", "#1f77b4", "#1f77b4", "#1f77b4"]
+            bars = ax3.barh(vol_df["Metric"], vol_df["Value"] * 100, color=colors)
+            ax3.set_xlabel("Volatility (%)", color='white')
+            ax3.set_title(f"{symbol} — IV vs. Realized Volatility", color='white')
+            ax3.tick_params(colors='white')
+            for bar, val in zip(bars, vol_df["Value"]):
+                ax3.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2,
+                         f"{val:.1%}", va="center", fontsize=10, color='white')
+            ax3.grid(True, alpha=0.3, axis="x")
+            fig3.tight_layout()
+            st.pyplot(fig3)
+            plt.close(fig3)
+
+            premium_ratio = iv_data["current_iv"] / iv_data["rv_30"] if iv_data["rv_30"] > 0 else 1
+            if premium_ratio > 1.3:
+                st.success(
+                    f"**IV/RV Ratio: {premium_ratio:.2f}x** — Options priced for "
+                    f"{(premium_ratio - 1) * 100:.0f}% more movement than realized. "
+                    f"Edge in selling premium.")
+            elif premium_ratio < 0.8:
+                st.success(
+                    f"**IV/RV Ratio: {premium_ratio:.2f}x** — Options cheap vs. "
+                    f"actual movement. Edge in buying premium.")
+            else:
+                st.info(f"**IV/RV Ratio: {premium_ratio:.2f}x** — IV and RV roughly in line.")
 
 
 # ═════════════════════════════════════════════
-# TAB 3: Greeks & IV
-# ═════════════════════════════════════════════
-
-with tab_greeks:
-    st.subheader("Greeks Across Strikes")
-
-    liquid = chain_df[chain_df["openInterest"].fillna(0) > 10].copy()
-    if liquid.empty:
-        liquid = chain_df.copy()
-    liquid = liquid[(liquid["moneyness"] >= 0.80) & (liquid["moneyness"] <= 1.20)]
-
-    greek_type = st.selectbox("Select Greek", ["Delta", "Gamma", "Theta", "Vega"],
-                               index=0, key="greek_select")
-    greek_col = greek_type.lower()
-
-    fig, ax = plt.subplots(figsize=(10, 5), facecolor=CHART_BG_COLOR)
-    ax.set_facecolor(CHART_FACE_COLOR)
-    calls_g = liquid[liquid["optionType"] == "call"].sort_values("strike")
-    puts_g = liquid[liquid["optionType"] == "put"].sort_values("strike")
-
-    if not calls_g.empty:
-        ax.plot(calls_g["strike"], calls_g[greek_col], "b-o", markersize=3,
-                label=f"Call {greek_type}", linewidth=1.5)
-    if not puts_g.empty:
-        ax.plot(puts_g["strike"], puts_g[greek_col], "r-o", markersize=3,
-                label=f"Put {greek_type}", linewidth=1.5)
-
-    ax.axvline(spot, color="gray", linestyle="--", alpha=0.7, label=f"Spot ${spot:.2f}")
-    ax.set_xlabel("Strike Price", color='white')
-    ax.set_ylabel(greek_type, color='white')
-    ax.set_title(f"{symbol} — {greek_type} by Strike ({selected_exp})", color='white')
-    ax.tick_params(colors='white')
-    ax.legend(facecolor=CHART_FACE_COLOR, labelcolor='white')
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
-
-    # IV Smile
-    st.subheader("Volatility Smile")
-    fig2, ax2 = plt.subplots(figsize=(10, 5), facecolor=CHART_BG_COLOR)
-    ax2.set_facecolor(CHART_FACE_COLOR)
-    if not calls_g.empty:
-        ax2.plot(calls_g["strike"], calls_g["impliedVolatility"] * 100,
-                 "b-o", markersize=3, label="Call IV", linewidth=1.5)
-    if not puts_g.empty:
-        ax2.plot(puts_g["strike"], puts_g["impliedVolatility"] * 100,
-                 "r-o", markersize=3, label="Put IV", linewidth=1.5)
-    ax2.axvline(spot, color="gray", linestyle="--", alpha=0.7, label=f"Spot ${spot:.2f}")
-    ax2.set_xlabel("Strike Price", color='white')
-    ax2.set_ylabel("Implied Volatility (%)", color='white')
-    ax2.set_title(f"{symbol} — Volatility Smile ({selected_exp})", color='white')
-    ax2.tick_params(colors='white')
-    ax2.legend(facecolor=CHART_FACE_COLOR, labelcolor='white')
-    ax2.grid(True, alpha=0.3)
-    fig2.tight_layout()
-    st.pyplot(fig2)
-    plt.close(fig2)
-
-    # IV vs RV
-    if iv_data:
-        st.subheader("Implied vs. Realized Volatility")
-        vol_data = {
-            "Metric": ["Current ATM IV", "30d RV", "60d RV", "90d RV"],
-            "Value": [iv_data["current_iv"], iv_data["rv_30"],
-                      iv_data["rv_60"], iv_data["rv_90"]],
-        }
-        vol_df = pd.DataFrame(vol_data)
-
-        fig3, ax3 = plt.subplots(figsize=(8, 4), facecolor=CHART_BG_COLOR)
-        ax3.set_facecolor(CHART_FACE_COLOR)
-        colors = ["#ff7f0e", "#1f77b4", "#1f77b4", "#1f77b4"]
-        bars = ax3.barh(vol_df["Metric"], vol_df["Value"] * 100, color=colors)
-        ax3.set_xlabel("Volatility (%)", color='white')
-        ax3.set_title(f"{symbol} — IV vs. Realized Volatility", color='white')
-        ax3.tick_params(colors='white')
-        for bar, val in zip(bars, vol_df["Value"]):
-            ax3.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2,
-                     f"{val:.1%}", va="center", fontsize=10, color='white')
-        ax3.grid(True, alpha=0.3, axis="x")
-        fig3.tight_layout()
-        st.pyplot(fig3)
-        plt.close(fig3)
-
-        premium_ratio = iv_data["current_iv"] / iv_data["rv_30"] if iv_data["rv_30"] > 0 else 1
-        if premium_ratio > 1.3:
-            st.success(
-                f"**IV/RV Ratio: {premium_ratio:.2f}x** — Options priced for "
-                f"{(premium_ratio - 1) * 100:.0f}% more movement than realized. "
-                f"Edge in selling premium.")
-        elif premium_ratio < 0.8:
-            st.success(
-                f"**IV/RV Ratio: {premium_ratio:.2f}x** — Options cheap vs. "
-                f"actual movement. Edge in buying premium.")
-        else:
-            st.info(f"**IV/RV Ratio: {premium_ratio:.2f}x** — IV and RV roughly in line.")
-
-
-# ═════════════════════════════════════════════
-# TAB 4: Entropy Analysis
+# TAB 2: Entropy Analysis
 # ═════════════════════════════════════════════
 
 with tab_entropy:
