@@ -1195,6 +1195,175 @@ with tab_portfolio:
                 st.caption(f"Shares: {drip_holding.shares:,.2f} → {drip_result['drip_final_shares']:,.2f} with DRIP")
 
     # ══════════════════════════════════════════════
+    # CASH & MONEY MARKET
+    # ══════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("### Cash & Money Market")
+
+    # Initialize cash balance
+    if "cash_balance" not in st.session_state:
+        st.session_state.cash_balance = 0.0
+
+    cash_tab1, cash_tab2 = st.tabs(["Cash Holdings", "Money Market Calculator"])
+
+    with cash_tab1:
+        st.caption("Track your cash position in the portfolio")
+
+        cash_col1, cash_col2, cash_col3 = st.columns([2, 1, 1])
+
+        with cash_col1:
+            new_cash = st.number_input(
+                "Cash Balance ($)",
+                min_value=0.0,
+                value=st.session_state.cash_balance,
+                step=100.0,
+                key="cash_input",
+                help="Enter your total cash holdings"
+            )
+
+        with cash_col2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("Update Cash", key="update_cash"):
+                st.session_state.cash_balance = new_cash
+                st.success(f"Cash updated to ${new_cash:,.2f}")
+                st.rerun()
+
+        with cash_col3:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("Clear Cash", key="clear_cash"):
+                st.session_state.cash_balance = 0.0
+                st.rerun()
+
+        # Show cash in portfolio context
+        if st.session_state.cash_balance > 0 or st.session_state.holdings:
+            total_invested = sum(h.market_value for h in st.session_state.holdings) if st.session_state.holdings else 0
+            total_portfolio = total_invested + st.session_state.cash_balance
+            cash_pct = (st.session_state.cash_balance / total_portfolio * 100) if total_portfolio > 0 else 0
+
+            cash_metrics = st.columns(4)
+            with cash_metrics[0]:
+                st.metric("Cash Balance", f"${st.session_state.cash_balance:,.2f}")
+            with cash_metrics[1]:
+                st.metric("Invested", f"${total_invested:,.2f}")
+            with cash_metrics[2]:
+                st.metric("Total Portfolio", f"${total_portfolio:,.2f}")
+            with cash_metrics[3]:
+                st.metric("Cash %", f"{cash_pct:.1f}%")
+
+    with cash_tab2:
+        st.caption("Calculate money market account growth with interest and contributions")
+
+        mm_col1, mm_col2 = st.columns(2)
+
+        with mm_col1:
+            mm_initial = st.number_input(
+                "Initial Deposit ($)",
+                min_value=0.0,
+                value=10000.0,
+                step=1000.0,
+                key="mm_initial"
+            )
+            mm_rate = st.slider(
+                "Annual Interest Rate (%)",
+                min_value=0.0,
+                max_value=10.0,
+                value=4.5,
+                step=0.1,
+                key="mm_rate",
+                help="Current money market rates are typically 4-5%"
+            )
+
+        with mm_col2:
+            mm_contribution = st.number_input(
+                "Monthly Contribution ($)",
+                min_value=0.0,
+                value=500.0,
+                step=100.0,
+                key="mm_contribution"
+            )
+            mm_years = st.slider(
+                "Time Period (Years)",
+                min_value=1,
+                max_value=30,
+                value=5,
+                key="mm_years"
+            )
+
+        if st.button("Calculate Growth", key="calc_mm"):
+            # Calculate money market growth
+            monthly_rate = mm_rate / 100 / 12
+            months = mm_years * 12
+
+            # Calculate future value with contributions
+            balance_history = [mm_initial]
+            balance = mm_initial
+            total_contributions = mm_initial
+            total_interest = 0
+
+            for month in range(1, months + 1):
+                interest = balance * monthly_rate
+                total_interest += interest
+                balance = balance + interest + mm_contribution
+                total_contributions += mm_contribution
+                if month % 12 == 0:  # Record yearly
+                    balance_history.append(balance)
+
+            # Results
+            result_cols = st.columns(4)
+            with result_cols[0]:
+                st.metric("Final Balance", f"${balance:,.2f}")
+            with result_cols[1]:
+                st.metric("Total Contributions", f"${total_contributions:,.2f}")
+            with result_cols[2]:
+                st.metric("Total Interest Earned", f"${total_interest:,.2f}")
+            with result_cols[3]:
+                growth_pct = ((balance - mm_initial) / mm_initial * 100) if mm_initial > 0 else 0
+                st.metric("Total Growth", f"{growth_pct:.1f}%")
+
+            # Growth chart
+            years_list = list(range(mm_years + 1))
+
+            fig_mm = go.Figure()
+            fig_mm.add_trace(go.Scatter(
+                x=years_list,
+                y=balance_history,
+                mode='lines+markers',
+                name='Balance',
+                line=dict(color='#4da6ff', width=3),
+                fill='tozeroy',
+                fillcolor='rgba(77, 166, 255, 0.2)',
+                hovertemplate='<b>Year %{x}</b><br>Balance: $%{y:,.2f}<extra></extra>'
+            ))
+
+            # Add contribution line for reference
+            contribution_line = [mm_initial + (mm_contribution * 12 * y) for y in years_list]
+            fig_mm.add_trace(go.Scatter(
+                x=years_list,
+                y=contribution_line,
+                mode='lines',
+                name='Contributions Only',
+                line=dict(color='#888888', width=2, dash='dash'),
+                hovertemplate='<b>Year %{x}</b><br>Contributions: $%{y:,.2f}<extra></extra>'
+            ))
+
+            fig_mm.update_layout(
+                title=f"Money Market Growth ({mm_rate}% APY)",
+                xaxis_title="Years",
+                yaxis_title="Balance ($)",
+                paper_bgcolor=CHART_BG_COLOR,
+                plot_bgcolor=CHART_FACE_COLOR,
+                font=dict(color='white'),
+                height=400,
+                legend=dict(bgcolor=CHART_FACE_COLOR, font=dict(color='white')),
+                hovermode='x unified',
+            )
+            st.plotly_chart(fig_mm, use_container_width=True)
+
+            st.info(f"💡 At {mm_rate}% APY with ${mm_contribution:,.0f}/month contributions, "
+                    f"your ${mm_initial:,.0f} grows to **${balance:,.0f}** in {mm_years} years. "
+                    f"Interest earned: **${total_interest:,.0f}**")
+
+    # ══════════════════════════════════════════════
     # IMPORT / EXPORT
     # ══════════════════════════════════════════════
     st.markdown("---")
