@@ -275,6 +275,8 @@ with tab_portfolio:
                 st.session_state.holdings.append(holding)
     if "editing_holding" not in st.session_state:
         st.session_state.editing_holding = None
+    if "watchlist" not in st.session_state:
+        st.session_state.watchlist = []
 
     # ── Add New Holdings ──
     st.markdown("### Add Holdings")
@@ -1660,10 +1662,6 @@ with tab_calendar:
     st.markdown("---")
     st.markdown("### Watchlist")
     st.caption("Track stocks you're interested in but don't own yet")
-
-    # Initialize watchlist
-    if "watchlist" not in st.session_state:
-        st.session_state.watchlist = []
 
     # Add to watchlist
     watch_col1, watch_col2, watch_col3, watch_col4 = st.columns([1.5, 1, 2, 1])
