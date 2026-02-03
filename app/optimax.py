@@ -568,38 +568,35 @@ with tab_portfolio:
                     })
                     holdings_for_pie = top_holdings
 
-                # Create pie chart with company colors - dark background
-                fig_hold, ax_hold = plt.subplots(figsize=(7, 5), facecolor=CHART_BG_COLOR)
-                ax_hold.set_facecolor(CHART_BG_COLOR)
+                # Create interactive Plotly pie chart
                 colors = [h["color"] for h in holdings_for_pie]
-                weights = [h["weight"] for h in holdings_for_pie]
-                labels = [f"{h['symbol']}" for h in holdings_for_pie]
 
-                # Create pie with percentages
-                wedges, texts, autotexts = ax_hold.pie(
-                    weights,
-                    labels=labels,
-                    autopct=lambda pct: f'{pct:.1f}%' if pct > 3 else '',
-                    colors=colors,
-                    startangle=90,
-                    pctdistance=0.75,
-                    labeldistance=1.1,
+                fig_hold = go.Figure(data=[go.Pie(
+                    labels=[h["symbol"] for h in holdings_for_pie],
+                    values=[h["weight"] for h in holdings_for_pie],
+                    marker=dict(colors=colors),
+                    hovertemplate="<b>%{label}</b><br>" +
+                                  "%{customdata}<br>" +
+                                  "Weight: %{percent}<br>" +
+                                  "Value: $%{value:,.2f}<extra></extra>",
+                    customdata=[h["name"] for h in holdings_for_pie],
+                    textinfo="label+percent",
+                    textposition="outside",
+                    textfont=dict(color="white", size=11),
+                    hole=0.3,  # Donut style
+                )])
+
+                fig_hold.update_layout(
+                    title=dict(text="Portfolio Holdings", font=dict(color="white", size=14)),
+                    paper_bgcolor=CHART_BG_COLOR,
+                    plot_bgcolor=CHART_BG_COLOR,
+                    font=dict(color="white"),
+                    showlegend=False,
+                    height=400,
+                    margin=dict(t=50, b=20, l=20, r=20),
                 )
 
-                # Style the text for dark background
-                for text in texts:
-                    text.set_fontsize(9)
-                    text.set_fontweight('bold')
-                    text.set_color('white')
-                for autotext in autotexts:
-                    autotext.set_fontsize(8)
-                    autotext.set_color('white')
-                    autotext.set_fontweight('bold')
-
-                ax_hold.set_title("Portfolio Holdings", fontsize=12, fontweight='bold', color='white')
-                fig_hold.tight_layout()
-                st.pyplot(fig_hold)
-                plt.close(fig_hold)
+                st.plotly_chart(fig_hold, use_container_width=True)
 
                 # Show holdings breakdown table
                 st.caption("**Holding Details:**")
