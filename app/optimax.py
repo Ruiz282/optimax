@@ -218,103 +218,22 @@ with col_price:
     st.metric("Spot Price", f"${spot:,.2f}")
 
 # ─────────────────────────────────────────────
-# IV Percentile Banner
+# Compute IV and Entropy (display moved to Options Trading tab)
 # ─────────────────────────────────────────────
 
-with st.spinner("Computing IV percentile..."):
+with st.spinner("Loading options data..."):
     iv_data = compute_iv_percentile(symbol)
+    entropy_signal = compute_market_entropy(lookback_days=90)
 
 iv_percentile = 50.0
 if iv_data:
     iv_percentile = iv_data["iv_percentile"]
 
-    iv_cols = st.columns(5)
-    with iv_cols[0]:
-        color = (
-            "inverse" if iv_data["iv_rank_label"] == "HIGH"
-            else "off" if iv_data["iv_rank_label"] == "LOW"
-            else "normal"
-        )
-        st.metric("IV Percentile", f"{iv_percentile:.0f}%",
-                   delta=iv_data["iv_rank_label"], delta_color=color)
-    with iv_cols[1]:
-        st.metric("Current ATM IV", f"{iv_data['current_iv']:.1%}")
-    with iv_cols[2]:
-        st.metric("30d Realized Vol", f"{iv_data['rv_30']:.1%}")
-    with iv_cols[3]:
-        st.metric("60d Realized Vol", f"{iv_data['rv_60']:.1%}")
-    with iv_cols[4]:
-        st.metric("90d Realized Vol", f"{iv_data['rv_90']:.1%}")
-
-    if iv_data["iv_rank_label"] == "HIGH":
-        st.info(
-            "**IV is elevated** — Options are expensive. "
-            "Favor strategies that **sell premium**: credit spreads, iron condors, covered calls."
-        )
-    elif iv_data["iv_rank_label"] == "LOW":
-        st.info(
-            "**IV is depressed** — Options are cheap. "
-            "Favor strategies that **buy premium**: long calls/puts, straddles, debit spreads."
-        )
-    else:
-        st.info(
-            "**IV is moderate** — No strong edge from volatility alone. "
-            "Focus on your directional view."
-        )
-
-# ─────────────────────────────────────────────
-# Entropy Signal
-# ─────────────────────────────────────────────
-
-with st.spinner("Computing market entropy..."):
-    entropy_signal = compute_market_entropy(lookback_days=90)
-
-if entropy_signal:
-    e_cols = st.columns(4)
-    with e_cols[0]:
-        regime_colors = {"CONCENTRATION": "inverse", "UNCERTAINTY": "off", "STABLE": "normal"}
-        st.metric(
-            "Market Regime",
-            entropy_signal.regime,
-            delta=f"{entropy_signal.entropy_change:+.3f} bits",
-            delta_color=regime_colors.get(entropy_signal.regime, "normal"),
-        )
-    with e_cols[1]:
-        st.metric("Entropy", f"{entropy_signal.current_entropy:.3f} bits",
-                   delta=f"Trend: {entropy_signal.entropy_trend}")
-    with e_cols[2]:
-        st.metric("HHI", f"{entropy_signal.current_hhi:.4f}",
-                   help="Herfindahl Index. Higher = more concentrated.")
-    with e_cols[3]:
-        st.metric("Strategy Bias", entropy_signal.strategy_bias.replace("_", " "),
-                   delta=entropy_signal.signal_strength, delta_color="normal")
-
-st.markdown("---")
-
-# ─────────────────────────────────────────────
-# Expiration Selector
-# ─────────────────────────────────────────────
-
+# Prepare expiration data
 exp_with_dte = []
 for exp in expirations:
     dte = (datetime.strptime(exp, "%Y-%m-%d") - datetime.now()).days
     exp_with_dte.append(f"{exp}  ({dte}d)")
-
-selected_idx = st.selectbox(
-    "Expiration Date",
-    range(len(expirations)),
-    format_func=lambda i: exp_with_dte[i],
-    index=min(2, len(expirations) - 1),
-)
-selected_exp = expirations[selected_idx]
-selected_dte = (datetime.strptime(selected_exp, "%Y-%m-%d") - datetime.now()).days
-
-# ─────────────────────────────────────────────
-# Fetch Chain
-# ─────────────────────────────────────────────
-
-with st.spinner(f"Loading options chain for {selected_exp}..."):
-    chain_df, _ = get_enriched_chain(symbol, selected_exp, risk_free_rate)
 
 # ─────────────────────────────────────────────
 # Main Tabs
@@ -1277,89 +1196,6 @@ with tab_portfolio:
                 st.caption(f"Shares: {drip_holding.shares:,.2f} → {drip_result['drip_final_shares']:,.2f} with DRIP")
 
     # ══════════════════════════════════════════════
-    # WATCHLIST
-    # ══════════════════════════════════════════════
-    st.markdown("---")
-    st.markdown("### Watchlist")
-    st.caption("Track stocks you're interested in but don't own yet")
-
-    # Initialize watchlist
-    if "watchlist" not in st.session_state:
-        st.session_state.watchlist = []
-
-    # Add to watchlist
-    watch_col1, watch_col2, watch_col3, watch_col4 = st.columns([1.5, 1, 2, 1])
-    with watch_col1:
-        watch_symbol = st.text_input("Symbol", placeholder="TSLA", key="watch_symbol").upper().strip()
-    with watch_col2:
-        watch_target = st.number_input("Target Price ($)", min_value=0.0, value=0.0, key="watch_target",
-                                        help="Optional buy target price")
-    with watch_col3:
-        watch_notes = st.text_input("Notes", placeholder="Waiting for pullback...", key="watch_notes")
-    with watch_col4:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("Add to Watchlist", key="add_watch"):
-            if watch_symbol:
-                with st.spinner(f"Adding {watch_symbol}..."):
-                    item = create_watchlist_item(
-                        watch_symbol,
-                        watch_target if watch_target > 0 else None,
-                        watch_notes if watch_notes else None
-                    )
-                    if item:
-                        st.session_state.watchlist.append(item)
-                        st.success(f"Added {watch_symbol} to watchlist")
-                        st.rerun()
-                    else:
-                        st.error(f"Could not find {watch_symbol}")
-
-    # Display watchlist
-    if st.session_state.watchlist:
-        # Refresh button
-        if st.button("Refresh Prices", key="refresh_watchlist"):
-            with st.spinner("Refreshing..."):
-                st.session_state.watchlist = [refresh_watchlist_item(w) for w in st.session_state.watchlist]
-                st.rerun()
-
-        watch_data = []
-        for w in st.session_state.watchlist:
-            target_str = f"${w.target_price:.2f}" if w.target_price else "-"
-            at_target = "✓" if w.target_price and w.current_price <= w.target_price else ""
-            watch_data.append({
-                "Symbol": w.symbol,
-                "Name": w.name[:20] + "..." if len(w.name) > 20 else w.name,
-                "Price": f"${w.current_price:.2f}",
-                "Target": target_str,
-                "At Target": at_target,
-                "Change": f"{w.change_since_add_pct:+.1f}%",
-                "Yield": f"{w.dividend_yield*100:.2f}%",
-                "52W High": f"${w.fifty_two_week_high:.2f}" if w.fifty_two_week_high else "-",
-                "52W Low": f"${w.fifty_two_week_low:.2f}" if w.fifty_two_week_low else "-",
-                "Notes": w.notes or "-",
-            })
-
-        st.dataframe(pd.DataFrame(watch_data), use_container_width=True, hide_index=True)
-
-        # Move to portfolio / Remove buttons
-        watch_action_cols = st.columns(min(len(st.session_state.watchlist), 6))
-        for i, w in enumerate(st.session_state.watchlist):
-            with watch_action_cols[i % 6]:
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    if st.button(f"Buy {w.symbol}", key=f"buy_watch_{w.symbol}_{i}"):
-                        holding = create_holding(w.symbol, 10, w.current_price, datetime.now(), w.notes)
-                        if holding:
-                            st.session_state.holdings.append(holding)
-                            st.session_state.watchlist.pop(i)
-                            st.rerun()
-                with col_b:
-                    if st.button(f"❌", key=f"del_watch_{w.symbol}_{i}"):
-                        st.session_state.watchlist.pop(i)
-                        st.rerun()
-    else:
-        st.info("Your watchlist is empty. Add stocks you're watching above.")
-
-    # ══════════════════════════════════════════════
     # IMPORT / EXPORT
     # ══════════════════════════════════════════════
     st.markdown("---")
@@ -1818,6 +1654,149 @@ with tab_calendar:
         else:
             st.info("No recent news found for your holdings")
 
+    # ══════════════════════════════════════════════
+    # WATCHLIST
+    # ══════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("### Watchlist")
+    st.caption("Track stocks you're interested in but don't own yet")
+
+    # Initialize watchlist
+    if "watchlist" not in st.session_state:
+        st.session_state.watchlist = []
+
+    # Add to watchlist
+    watch_col1, watch_col2, watch_col3, watch_col4 = st.columns([1.5, 1, 2, 1])
+    with watch_col1:
+        watch_symbol = st.text_input("Symbol", placeholder="TSLA", key="cal_watch_symbol").upper().strip()
+    with watch_col2:
+        watch_target = st.number_input("Target Price ($)", min_value=0.0, value=0.0, key="cal_watch_target",
+                                        help="Optional buy target price")
+    with watch_col3:
+        watch_notes = st.text_input("Notes", placeholder="Waiting for pullback...", key="cal_watch_notes")
+    with watch_col4:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("Add to Watchlist", key="cal_add_watch"):
+            if watch_symbol:
+                with st.spinner(f"Adding {watch_symbol}..."):
+                    item = create_watchlist_item(
+                        watch_symbol,
+                        watch_target if watch_target > 0 else None,
+                        watch_notes if watch_notes else None
+                    )
+                    if item:
+                        st.session_state.watchlist.append(item)
+                        st.success(f"Added {watch_symbol} to watchlist")
+                        st.rerun()
+                    else:
+                        st.error(f"Could not find {watch_symbol}")
+
+    # Display watchlist
+    if st.session_state.watchlist:
+        # Refresh button
+        if st.button("Refresh Prices", key="cal_refresh_watchlist"):
+            with st.spinner("Refreshing..."):
+                st.session_state.watchlist = [refresh_watchlist_item(w) for w in st.session_state.watchlist]
+                st.rerun()
+
+        watch_data = []
+        for w in st.session_state.watchlist:
+            target_str = f"${w.target_price:.2f}" if w.target_price else "-"
+            at_target = "✓" if w.target_price and w.current_price <= w.target_price else ""
+            watch_data.append({
+                "Symbol": w.symbol,
+                "Name": w.name[:25] + "..." if len(w.name) > 25 else w.name,
+                "Price": f"${w.current_price:.2f}",
+                "Target": target_str,
+                "At Target": at_target,
+                "Change": f"{w.change_since_add_pct:+.1f}%",
+                "Yield": f"{w.dividend_yield*100:.2f}%",
+                "52W High": f"${w.fifty_two_week_high:.2f}" if w.fifty_two_week_high else "-",
+                "52W Low": f"${w.fifty_two_week_low:.2f}" if w.fifty_two_week_low else "-",
+                "Notes": w.notes or "-",
+            })
+
+        st.dataframe(pd.DataFrame(watch_data), use_container_width=True, hide_index=True)
+
+        # Move to portfolio / Remove buttons
+        watch_action_cols = st.columns(min(len(st.session_state.watchlist), 6))
+        for i, w in enumerate(st.session_state.watchlist):
+            with watch_action_cols[i % 6]:
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    if st.button(f"Buy {w.symbol}", key=f"cal_buy_watch_{w.symbol}_{i}"):
+                        holding = create_holding(w.symbol, 10, w.current_price, datetime.now(), w.notes)
+                        if holding:
+                            st.session_state.holdings.append(holding)
+                            st.session_state.watchlist.pop(i)
+                            st.rerun()
+                with col_b:
+                    if st.button(f"❌", key=f"cal_del_watch_{w.symbol}_{i}"):
+                        st.session_state.watchlist.pop(i)
+                        st.rerun()
+
+        # ══════════════════════════════════════════════
+        # NEWS FOR WATCHLIST ITEMS
+        # ══════════════════════════════════════════════
+        st.markdown("---")
+        st.markdown("### Watchlist News")
+        st.caption("Recent news for stocks on your watchlist (last 30 days)")
+
+        with st.spinner("Loading watchlist news..."):
+            watchlist_news = []
+            for w in st.session_state.watchlist:
+                news_items = get_stock_news(w.symbol, limit=5)
+                # Filter to last 30 days
+                thirty_days_ago = datetime.now() - relativedelta(days=30)
+                for n in news_items:
+                    if n.published >= thirty_days_ago:
+                        watchlist_news.append(n)
+
+            # Sort by date, most recent first
+            watchlist_news.sort(key=lambda x: x.published, reverse=True)
+
+        if watchlist_news:
+            # Filter selector
+            watch_news_symbols = ["All"] + sorted(list(set(n.symbol for n in watchlist_news)))
+            watch_news_filter = st.selectbox("Filter by Stock", watch_news_symbols, key="watchlist_news_filter")
+
+            filtered_watch_news = watchlist_news if watch_news_filter == "All" else [n for n in watchlist_news if n.symbol == watch_news_filter]
+
+            # Get ticker names for display
+            ticker_names = {w.symbol: w.name for w in st.session_state.watchlist}
+
+            for i, news in enumerate(filtered_watch_news[:20]):
+                time_ago = datetime.now() - news.published
+                if time_ago.days > 0:
+                    time_str = f"{time_ago.days}d ago"
+                elif time_ago.seconds > 3600:
+                    time_str = f"{time_ago.seconds // 3600}h ago"
+                else:
+                    time_str = f"{time_ago.seconds // 60}m ago"
+
+                # Get company color for the badge
+                badge_color = get_company_color(news.symbol)
+                ticker_name = ticker_names.get(news.symbol, news.symbol)
+
+                st.markdown(
+                    f"""
+                    <div style='padding: 12px; margin: 8px 0; background-color: {CHART_FACE_COLOR}; border-radius: 8px; border-left: 4px solid {badge_color};'>
+                        <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;'>
+                            <span style='background-color: {badge_color}; padding: 3px 10px; border-radius: 4px; font-size: 0.85em; font-weight: bold; color: white;'>{news.symbol} - {ticker_name[:20]}</span>
+                            <span style='color: #888; font-size: 0.8em;'>{time_str} • {news.publisher}</span>
+                        </div>
+                        <a href='{news.link}' target='_blank' style='color: #4da6ff; text-decoration: none; font-weight: 500; font-size: 1.05em; display: block;'>
+                            {news.title} ↗
+                        </a>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+        else:
+            st.info("No recent news found for your watchlist stocks")
+    else:
+        st.info("Your watchlist is empty. Add stocks you're watching above.")
+
 
 # ═════════════════════════════════════════════
 # TAB 2: Options Trading (Strategy + Chain + Greeks)
@@ -1825,6 +1804,82 @@ with tab_calendar:
 
 with tab_options:
     st.subheader("Options Trading")
+
+    # ── IV Percentile Banner ──
+    if iv_data:
+        iv_cols = st.columns(5)
+        with iv_cols[0]:
+            color = (
+                "inverse" if iv_data["iv_rank_label"] == "HIGH"
+                else "off" if iv_data["iv_rank_label"] == "LOW"
+                else "normal"
+            )
+            st.metric("IV Percentile", f"{iv_percentile:.0f}%",
+                       delta=iv_data["iv_rank_label"], delta_color=color)
+        with iv_cols[1]:
+            st.metric("Current ATM IV", f"{iv_data['current_iv']:.1%}")
+        with iv_cols[2]:
+            st.metric("30d Realized Vol", f"{iv_data['rv_30']:.1%}")
+        with iv_cols[3]:
+            st.metric("60d Realized Vol", f"{iv_data['rv_60']:.1%}")
+        with iv_cols[4]:
+            st.metric("90d Realized Vol", f"{iv_data['rv_90']:.1%}")
+
+        if iv_data["iv_rank_label"] == "HIGH":
+            st.info(
+                "**IV is elevated** — Options are expensive. "
+                "Favor strategies that **sell premium**: credit spreads, iron condors, covered calls."
+            )
+        elif iv_data["iv_rank_label"] == "LOW":
+            st.info(
+                "**IV is depressed** — Options are cheap. "
+                "Favor strategies that **buy premium**: long calls/puts, straddles, debit spreads."
+            )
+        else:
+            st.info(
+                "**IV is moderate** — No strong edge from volatility alone. "
+                "Focus on your directional view."
+            )
+
+    # ── Entropy Signal ──
+    if entropy_signal:
+        e_cols = st.columns(4)
+        with e_cols[0]:
+            regime_colors = {"CONCENTRATION": "inverse", "UNCERTAINTY": "off", "STABLE": "normal"}
+            st.metric(
+                "Market Regime",
+                entropy_signal.regime,
+                delta=f"{entropy_signal.entropy_change:+.3f} bits",
+                delta_color=regime_colors.get(entropy_signal.regime, "normal"),
+            )
+        with e_cols[1]:
+            st.metric("Entropy", f"{entropy_signal.current_entropy:.3f} bits",
+                       delta=f"Trend: {entropy_signal.entropy_trend}")
+        with e_cols[2]:
+            st.metric("HHI", f"{entropy_signal.current_hhi:.4f}",
+                       help="Herfindahl Index. Higher = more concentrated.")
+        with e_cols[3]:
+            st.metric("Strategy Bias", entropy_signal.strategy_bias.replace("_", " "),
+                       delta=entropy_signal.signal_strength, delta_color="normal")
+
+    st.markdown("---")
+
+    # ── Expiration Selector ──
+    selected_idx = st.selectbox(
+        "Expiration Date",
+        range(len(expirations)),
+        format_func=lambda i: exp_with_dte[i],
+        index=min(2, len(expirations) - 1),
+        key="options_exp_selector"
+    )
+    selected_exp = expirations[selected_idx]
+    selected_dte = (datetime.strptime(selected_exp, "%Y-%m-%d") - datetime.now()).days
+
+    # ── Fetch Chain ──
+    with st.spinner(f"Loading options chain for {selected_exp}..."):
+        chain_df, _ = get_enriched_chain(symbol, selected_exp, risk_free_rate)
+
+    st.markdown("---")
 
     # Create subtabs for options trading
     options_subtab1, options_subtab2, options_subtab3 = st.tabs([
@@ -1836,15 +1891,15 @@ with tab_options:
     with options_subtab1:
         st.markdown("#### Recommended Strategies")
 
-    regime_str = f" | Regime: **{entropy_signal.regime}**" if entropy_signal else ""
-    st.caption(
-        f"View: **{outlook}** | "
-        f"IV: **{iv_percentile:.0f}th %ile** | "
-        f"DTE: **{selected_dte}d** | "
-        f"Risk: **{risk_tolerance}** | "
-        f"Portfolio: **${portfolio_value:,.0f}**"
-        f"{regime_str}"
-    )
+        regime_str = f" | Regime: **{entropy_signal.regime}**" if entropy_signal else ""
+        st.caption(
+            f"View: **{outlook}** | "
+            f"IV: **{iv_percentile:.0f}th %ile** | "
+            f"DTE: **{selected_dte}d** | "
+            f"Risk: **{risk_tolerance}** | "
+            f"Portfolio: **${portfolio_value:,.0f}**"
+            f"{regime_str}"
+        )
 
     # Build entropy adjustment function
     entropy_fn = None
