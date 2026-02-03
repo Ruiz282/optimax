@@ -640,15 +640,49 @@ def get_stock_news(symbol: str, limit: int = 5) -> List[NewsItem]:
         items = []
         for article in news[:limit]:
             try:
-                pub_time = datetime.fromtimestamp(article.get("providerPublishTime", 0))
-                items.append(NewsItem(
-                    title=article.get("title", ""),
-                    publisher=article.get("publisher", ""),
-                    link=article.get("link", ""),
-                    published=pub_time,
-                    symbol=symbol,
-                    summary=article.get("summary", None),
-                ))
+                # Handle new yfinance news structure (nested under 'content')
+                content = article.get("content", article)
+
+                # Get title
+                title = content.get("title", "")
+
+                # Get publisher
+                provider = content.get("provider", {})
+                publisher = provider.get("displayName", "") if isinstance(provider, dict) else ""
+
+                # Get link - try multiple possible locations
+                link = ""
+                if "canonicalUrl" in content and isinstance(content["canonicalUrl"], dict):
+                    link = content["canonicalUrl"].get("url", "")
+                elif "clickThroughUrl" in content and isinstance(content["clickThroughUrl"], dict):
+                    link = content["clickThroughUrl"].get("url", "")
+                elif "link" in content:
+                    link = content.get("link", "")
+
+                # Get published date
+                pub_date_str = content.get("pubDate", "")
+                if pub_date_str:
+                    try:
+                        # Parse ISO format date
+                        pub_time = datetime.fromisoformat(pub_date_str.replace("Z", "+00:00")).replace(tzinfo=None)
+                    except:
+                        pub_time = datetime.now()
+                else:
+                    # Fallback to old format
+                    pub_time = datetime.fromtimestamp(article.get("providerPublishTime", 0))
+
+                # Get summary
+                summary = content.get("summary", content.get("description", None))
+
+                if title and link:  # Only add if we have both title and link
+                    items.append(NewsItem(
+                        title=title,
+                        publisher=publisher,
+                        link=link,
+                        published=pub_time,
+                        symbol=symbol,
+                        summary=summary,
+                    ))
             except Exception:
                 continue
 
