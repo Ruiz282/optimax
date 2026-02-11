@@ -239,8 +239,9 @@ for exp in expirations:
 # Main Tabs
 # ─────────────────────────────────────────────
 
-tab_portfolio, tab_calendar, tab_options, tab_entropy = st.tabs([
+tab_portfolio, tab_cash, tab_calendar, tab_options, tab_entropy = st.tabs([
     "Portfolio Manager",
+    "Cash & Money Market",
     "Calendar & News",
     "Options Trading",
     "Entropy Analysis",
@@ -1181,8 +1182,112 @@ with tab_portfolio:
     # ══════════════════════════════════════════════
     # CASH & MONEY MARKET
     # ══════════════════════════════════════════════
+    # ══════════════════════════════════════════════
+    # IMPORT / EXPORT
+    # ══════════════════════════════════════════════
     st.markdown("---")
-    st.markdown("### Cash & Money Market")
+    st.markdown("### Import / Export")
+
+    exp_col1, exp_col2 = st.columns(2)
+
+    with exp_col1:
+        st.markdown("**Export Portfolio**")
+        if st.session_state.holdings:
+            csv_data = export_holdings_to_csv(st.session_state.holdings)
+            st.download_button(
+                "Download Holdings CSV",
+                csv_data,
+                file_name="portfolio_holdings.csv",
+                mime="text/csv",
+                key="export_holdings"
+            )
+        else:
+            st.caption("No holdings to export")
+
+        if st.session_state.watchlist:
+            watch_csv = export_watchlist_to_csv(st.session_state.watchlist)
+            st.download_button(
+                "Download Watchlist CSV",
+                watch_csv,
+                file_name="watchlist.csv",
+                mime="text/csv",
+                key="export_watchlist"
+            )
+
+    with exp_col2:
+        st.markdown("**Import Portfolio**")
+
+        # Initialize parsed holdings cache
+        if "parsed_csv_holdings" not in st.session_state:
+            st.session_state.parsed_csv_holdings = None
+
+        uploaded_file = st.file_uploader("Upload CSV", type="csv", key="import_file")
+
+        if uploaded_file:
+            # Only parse if we haven't already or if it's a new file
+            csv_content = uploaded_file.read().decode("utf-8")
+            uploaded_file.seek(0)  # Reset file pointer
+            parsed = import_holdings_from_csv(csv_content)
+            if parsed:
+                st.session_state.parsed_csv_holdings = parsed
+
+        # Show import options if we have parsed data
+        if st.session_state.parsed_csv_holdings:
+            parsed = st.session_state.parsed_csv_holdings
+            st.success(f"Found {len(parsed)} holdings in CSV")
+
+            # Show preview
+            preview_data = []
+            for item in parsed[:5]:
+                preview_data.append({
+                    "Symbol": item["symbol"],
+                    "Shares": item["shares"],
+                    "Cost": f"${item['cost']:.2f}"
+                })
+            if preview_data:
+                st.dataframe(pd.DataFrame(preview_data), hide_index=True)
+                if len(parsed) > 5:
+                    st.caption(f"...and {len(parsed) - 5} more")
+
+            if st.button("Import All Holdings", key="do_import", type="primary"):
+                with st.spinner("Importing holdings..."):
+                    success = 0
+                    for item in parsed:
+                        holding = create_holding(
+                            item["symbol"],
+                            item["shares"],
+                            item["cost"],
+                            item["purchase_date"],
+                            item.get("notes")
+                        )
+                        if holding:
+                            existing_idx = next(
+                                (i for i, h in enumerate(st.session_state.holdings) if h.symbol == item["symbol"]),
+                                None
+                            )
+                            if existing_idx is not None:
+                                st.session_state.holdings[existing_idx] = holding
+                            else:
+                                st.session_state.holdings.append(holding)
+                            success += 1
+                    st.session_state.parsed_csv_holdings = None  # Clear cache
+                    st.success(f"Imported {success} holdings!")
+                    st.rerun()
+
+            if st.button("Clear", key="clear_csv"):
+                st.session_state.parsed_csv_holdings = None
+                st.rerun()
+        elif uploaded_file:
+            st.warning("Could not parse CSV. Use format: Symbol,Shares,Cost,Date,Notes")
+
+
+# ═════════════════════════════════════════════
+# TAB 1: Cash & Money Market
+# ═════════════════════════════════════════════
+
+with tab_cash:
+    st.subheader("Cash & Money Market")
+    st.caption("Track cash holdings and calculate money market growth")
 
     # Initialize cash balance
     if "cash_balance" not in st.session_state:
@@ -1191,6 +1296,7 @@ with tab_portfolio:
     cash_tab1, cash_tab2 = st.tabs(["Cash Holdings", "Money Market Calculator"])
 
     with cash_tab1:
+        st.markdown("### Cash Holdings")
         st.caption("Track your cash position in the portfolio")
 
         cash_col1, cash_col2, cash_col3 = st.columns([2, 1, 1])
@@ -1224,6 +1330,7 @@ with tab_portfolio:
             total_portfolio = total_invested + st.session_state.cash_balance
             cash_pct = (st.session_state.cash_balance / total_portfolio * 100) if total_portfolio > 0 else 0
 
+            st.markdown("---")
             cash_metrics = st.columns(4)
             with cash_metrics[0]:
                 st.metric("Cash Balance", f"${st.session_state.cash_balance:,.2f}")
@@ -1235,6 +1342,7 @@ with tab_portfolio:
                 st.metric("Cash %", f"{cash_pct:.1f}%")
 
     with cash_tab2:
+        st.markdown("### Money Market Calculator")
         st.caption("Calculate money market account growth with interest and contributions")
 
         mm_col1, mm_col2 = st.columns(2)
@@ -1343,81 +1451,13 @@ with tab_portfolio:
             )
             st.plotly_chart(fig_mm, use_container_width=True)
 
-            st.info(f"💡 At {mm_rate}% APY with ${mm_contribution:,.0f}/month contributions, "
+            st.info(f"At {mm_rate}% APY with ${mm_contribution:,.0f}/month contributions, "
                     f"your ${mm_initial:,.0f} grows to **${balance:,.0f}** in {mm_years} years. "
                     f"Interest earned: **${total_interest:,.0f}**")
 
-    # ══════════════════════════════════════════════
-    # IMPORT / EXPORT
-    # ══════════════════════════════════════════════
-    st.markdown("---")
-    st.markdown("### Import / Export")
-
-    exp_col1, exp_col2 = st.columns(2)
-
-    with exp_col1:
-        st.markdown("**Export Portfolio**")
-        if st.session_state.holdings:
-            csv_data = export_holdings_to_csv(st.session_state.holdings)
-            st.download_button(
-                "Download Holdings CSV",
-                csv_data,
-                file_name="portfolio_holdings.csv",
-                mime="text/csv",
-                key="export_holdings"
-            )
-        else:
-            st.caption("No holdings to export")
-
-        if st.session_state.watchlist:
-            watch_csv = export_watchlist_to_csv(st.session_state.watchlist)
-            st.download_button(
-                "Download Watchlist CSV",
-                watch_csv,
-                file_name="watchlist.csv",
-                mime="text/csv",
-                key="export_watchlist"
-            )
-
-    with exp_col2:
-        st.markdown("**Import Portfolio**")
-        uploaded_file = st.file_uploader("Upload CSV", type="csv", key="import_file")
-
-        if uploaded_file:
-            csv_content = uploaded_file.read().decode("utf-8")
-            parsed = import_holdings_from_csv(csv_content)
-
-            if parsed:
-                st.success(f"Found {len(parsed)} holdings in CSV")
-                if st.button("Import All", key="do_import"):
-                    with st.spinner("Importing..."):
-                        success = 0
-                        for item in parsed:
-                            holding = create_holding(
-                                item["symbol"],
-                                item["shares"],
-                                item["cost"],
-                                item["purchase_date"],
-                                item.get("notes")
-                            )
-                            if holding:
-                                existing_idx = next(
-                                    (i for i, h in enumerate(st.session_state.holdings) if h.symbol == item["symbol"]),
-                                    None
-                                )
-                                if existing_idx is not None:
-                                    st.session_state.holdings[existing_idx] = holding
-                                else:
-                                    st.session_state.holdings.append(holding)
-                                success += 1
-                        st.success(f"Imported {success} holdings!")
-                        st.rerun()
-            else:
-                st.warning("Could not parse CSV. Use format: Symbol,Shares,Cost,Date,Notes")
-
 
 # ═════════════════════════════════════════════
-# TAB 1: Calendar & News
+# TAB 2: Calendar & News
 # ═════════════════════════════════════════════
 
 with tab_calendar:
