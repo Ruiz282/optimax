@@ -333,20 +333,10 @@ if not expirations:
     st.stop()
 
 # ─────────────────────────────────────────────
-# Header
+# Compute IV and Entropy (display moved to Options Trading tab)
 # ─────────────────────────────────────────────
 
 spot = info["spot"]
-
-col_title, col_price = st.columns([3, 1])
-with col_title:
-    st.title(f"{info['name']} ({symbol})")
-with col_price:
-    st.metric("Spot Price", f"${spot:,.2f}")
-
-# ─────────────────────────────────────────────
-# Compute IV and Entropy (display moved to Options Trading tab)
-# ─────────────────────────────────────────────
 
 with st.spinner("Loading options data..."):
     iv_data = compute_iv_percentile(symbol)
@@ -1896,6 +1886,7 @@ with tab_portfolio:
 
     with exp_col2:
         st.markdown("**Import Portfolio**")
+        st.caption("Format: Symbol,Shares,Cost,Date (e.g., AAPL,10,150.00,2024-01-15)")
 
         # Initialize parsed holdings cache
         if "parsed_csv_holdings" not in st.session_state:
@@ -1904,12 +1895,19 @@ with tab_portfolio:
         uploaded_file = st.file_uploader("Upload CSV", type="csv", key="import_file")
 
         if uploaded_file:
-            # Only parse if we haven't already or if it's a new file
-            csv_content = uploaded_file.read().decode("utf-8")
-            uploaded_file.seek(0)  # Reset file pointer
-            parsed = import_holdings_from_csv(csv_content)
-            if parsed:
-                st.session_state.parsed_csv_holdings = parsed
+            try:
+                # Read and parse CSV
+                csv_content = uploaded_file.read().decode("utf-8")
+                st.text_area("CSV Preview", csv_content[:500], height=100, disabled=True)
+
+                parsed = import_holdings_from_csv(csv_content)
+                if parsed:
+                    st.session_state.parsed_csv_holdings = parsed
+                    st.success(f"Parsed {len(parsed)} holdings from CSV")
+                else:
+                    st.error("Could not parse any holdings from CSV")
+            except Exception as e:
+                st.error(f"Error reading CSV: {e}")
 
         # Show import options if we have parsed data
         if st.session_state.parsed_csv_holdings:
@@ -2672,6 +2670,15 @@ with tab_calendar:
 
 with tab_options:
     st.subheader("Options Trading")
+
+    # ── Stock Header ──
+    header_col1, header_col2 = st.columns([3, 1])
+    with header_col1:
+        st.markdown(f"### {info['name']} ({symbol})")
+    with header_col2:
+        st.metric("Spot Price", f"${spot:,.2f}")
+
+    st.markdown("---")
 
     # ── IV Percentile Banner ──
     if iv_data:
