@@ -192,6 +192,12 @@ def check_authentication():
 
 def login_form():
     """Display login form in sidebar."""
+    # Initialize authentication state
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+    if "username" not in st.session_state:
+        st.session_state.username = None
+
     if not st.session_state.authenticated:
         with st.sidebar.expander("🔐 Login / Sign Up", expanded=False):
             auth_tab1, auth_tab2 = st.tabs(["Login", "Sign Up"])
