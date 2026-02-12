@@ -429,31 +429,31 @@ with tab_dashboard:
             perf_col1, perf_col2 = st.columns(2)
 
             sorted_by_gain = sorted(st.session_state.holdings,
-                                   key=lambda h: h.gain_loss_pct, reverse=True)
+                                   key=lambda h: h.unrealized_pnl_pct, reverse=True)
 
             with perf_col1:
                 st.markdown("**🚀 Top Performers**")
                 for h in sorted_by_gain[:5]:
-                    color = "#00C853" if h.gain_loss_pct >= 0 else "#FF5252"
+                    color = "#00C853" if h.unrealized_pnl_pct >= 0 else "#FF5252"
                     st.markdown(f"""
                     <div style='display: flex; justify-content: space-between; padding: 8px;
                                 background: #2E2E2E; border-radius: 5px; margin: 4px 0;
                                 border-left: 3px solid {color};'>
                         <span><b>{h.symbol}</b> - {h.name[:20]}</span>
-                        <span style='color: {color};'>{h.gain_loss_pct:+.2f}%</span>
+                        <span style='color: {color};'>{h.unrealized_pnl_pct:+.2f}%</span>
                     </div>
                     """, unsafe_allow_html=True)
 
             with perf_col2:
                 st.markdown("**📉 Bottom Performers**")
                 for h in sorted_by_gain[-5:][::-1]:
-                    color = "#00C853" if h.gain_loss_pct >= 0 else "#FF5252"
+                    color = "#00C853" if h.unrealized_pnl_pct >= 0 else "#FF5252"
                     st.markdown(f"""
                     <div style='display: flex; justify-content: space-between; padding: 8px;
                                 background: #2E2E2E; border-radius: 5px; margin: 4px 0;
                                 border-left: 3px solid {color};'>
                         <span><b>{h.symbol}</b> - {h.name[:20]}</span>
-                        <span style='color: {color};'>{h.gain_loss_pct:+.2f}%</span>
+                        <span style='color: {color};'>{h.unrealized_pnl_pct:+.2f}%</span>
                     </div>
                     """, unsafe_allow_html=True)
 
@@ -498,7 +498,7 @@ with tab_dashboard:
                 betas.append(h.beta if h.beta else 1.0)
                 # Estimate daily return from gain/loss (simplified)
                 if h.cost_basis > 0:
-                    total_return = h.gain_loss_pct / 100
+                    total_return = h.unrealized_pnl_pct / 100
                     # Assume held for average 1 year, estimate daily
                     returns.append(total_return)
 
@@ -514,7 +514,7 @@ with tab_dashboard:
                 sharpe = (avg_return - risk_free) / volatility if volatility > 0 else 0
 
                 # Max Drawdown (simplified - based on individual holdings)
-                max_dd = min(h.gain_loss_pct for h in st.session_state.holdings)
+                max_dd = min(h.unrealized_pnl_pct for h in st.session_state.holdings)
 
                 # Value at Risk (95% confidence, simplified)
                 var_95 = total_invested * volatility * 1.645
@@ -820,8 +820,8 @@ with tab_dashboard:
                 })
 
             # Winners/Losers analysis
-            big_winners = [h for h in st.session_state.holdings if h.gain_loss_pct > 50]
-            big_losers = [h for h in st.session_state.holdings if h.gain_loss_pct < -20]
+            big_winners = [h for h in st.session_state.holdings if h.unrealized_pnl_pct > 50]
+            big_losers = [h for h in st.session_state.holdings if h.unrealized_pnl_pct < -20]
 
             if big_winners:
                 insights.append({
