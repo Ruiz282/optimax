@@ -116,9 +116,130 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────
+# Custom CSS for Loading Animation & Styling
+# ─────────────────────────────────────────────
+
+st.markdown("""
+<style>
+/* Loading animation */
+@keyframes pulse {
+    0% { opacity: 0.6; }
+    50% { opacity: 1; }
+    100% { opacity: 0.6; }
+}
+
+.loading-pulse {
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+/* Custom spinner */
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.custom-spinner {
+    border: 4px solid #3a3a3a;
+    border-top: 4px solid #4da6ff;
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    animation: spin 1s linear infinite;
+    margin: 20px auto;
+}
+
+/* Professional card styling */
+.metric-card {
+    background: linear-gradient(135deg, #2E2E2E 0%, #3A3A3A 100%);
+    border-radius: 10px;
+    padding: 20px;
+    border-left: 4px solid #4da6ff;
+    margin: 10px 0;
+}
+
+/* Health score colors */
+.health-excellent { color: #00C853; }
+.health-good { color: #4da6ff; }
+.health-fair { color: #FFB300; }
+.health-poor { color: #FF5252; }
+
+/* Insight cards */
+.insight-card {
+    background: #2E2E2E;
+    border-radius: 8px;
+    padding: 15px;
+    margin: 8px 0;
+    border-left: 3px solid;
+}
+.insight-positive { border-color: #00C853; }
+.insight-warning { border-color: #FFB300; }
+.insight-negative { border-color: #FF5252; }
+.insight-info { border-color: #4da6ff; }
+</style>
+""", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────
+# Simple Authentication
+# ─────────────────────────────────────────────
+
+def check_authentication():
+    """Simple authentication system."""
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+    if "username" not in st.session_state:
+        st.session_state.username = None
+    return st.session_state.authenticated
+
+def login_form():
+    """Display login form in sidebar."""
+    if not st.session_state.authenticated:
+        with st.sidebar.expander("🔐 Login / Sign Up", expanded=False):
+            auth_tab1, auth_tab2 = st.tabs(["Login", "Sign Up"])
+
+            with auth_tab1:
+                login_user = st.text_input("Username", key="login_user")
+                login_pass = st.text_input("Password", type="password", key="login_pass")
+                if st.button("Login", key="login_btn"):
+                    # Simple demo authentication (in production, use proper auth)
+                    if login_user and login_pass:
+                        st.session_state.authenticated = True
+                        st.session_state.username = login_user
+                        st.success(f"Welcome, {login_user}!")
+                        st.rerun()
+                    else:
+                        st.error("Please enter username and password")
+
+            with auth_tab2:
+                new_user = st.text_input("Choose Username", key="new_user")
+                new_pass = st.text_input("Choose Password", type="password", key="new_pass")
+                new_pass2 = st.text_input("Confirm Password", type="password", key="new_pass2")
+                if st.button("Sign Up", key="signup_btn"):
+                    if new_user and new_pass and new_pass == new_pass2:
+                        st.session_state.authenticated = True
+                        st.session_state.username = new_user
+                        st.success(f"Account created! Welcome, {new_user}!")
+                        st.rerun()
+                    elif new_pass != new_pass2:
+                        st.error("Passwords don't match")
+                    else:
+                        st.error("Please fill all fields")
+
+            st.caption("Demo mode: any credentials work")
+    else:
+        st.sidebar.success(f"Logged in as: **{st.session_state.username}**")
+        if st.sidebar.button("Logout", key="logout_btn"):
+            st.session_state.authenticated = False
+            st.session_state.username = None
+            st.rerun()
+
+# Run authentication
+login_form()
+
+# ─────────────────────────────────────────────
 # Sidebar — Inputs
 # ─────────────────────────────────────────────
 
+st.sidebar.markdown("---")
 st.sidebar.title("OptiMax")
 st.sidebar.caption("Options & Portfolio Manager")
 st.sidebar.markdown("---")
@@ -239,16 +360,569 @@ for exp in expirations:
 # Main Tabs
 # ─────────────────────────────────────────────
 
-tab_portfolio, tab_cash, tab_calendar, tab_options, tab_entropy = st.tabs([
-    "Portfolio Manager",
-    "Cash & Money Market",
-    "Calendar & News",
-    "Options Trading",
-    "Entropy Analysis",
+tab_dashboard, tab_portfolio, tab_cash, tab_calendar, tab_options, tab_entropy = st.tabs([
+    "📊 Dashboard",
+    "💼 Portfolio Manager",
+    "💵 Cash & Money Market",
+    "📅 Calendar & News",
+    "📈 Options Trading",
+    "🔬 Entropy Analysis",
 ])
 
 # ═════════════════════════════════════════════
-# TAB 0: Portfolio Manager
+# TAB: Dashboard
+# ═════════════════════════════════════════════
+
+with tab_dashboard:
+    st.subheader("Dashboard")
+
+    # Initialize holdings if needed
+    if "holdings" not in st.session_state:
+        st.session_state.holdings = []
+    if "cash_balance" not in st.session_state:
+        st.session_state.cash_balance = 0.0
+
+    if not st.session_state.holdings:
+        st.info("👋 Welcome to OptiMax! Add holdings in the Portfolio Manager tab to see your dashboard.")
+        st.markdown("""
+        **Quick Start:**
+        1. Go to **Portfolio Manager** tab
+        2. Upload a CSV or add holdings manually
+        3. Return here to see your dashboard with analytics
+        """)
+    else:
+        # Calculate portfolio metrics
+        with st.spinner("Loading dashboard..."):
+            summary = calculate_portfolio_summary(st.session_state.holdings)
+            total_invested = summary["total_value"]
+            total_with_cash = total_invested + st.session_state.cash_balance
+
+        # ── Top Metrics Row ──
+        st.markdown("### Portfolio Overview")
+        metric_cols = st.columns(6)
+        with metric_cols[0]:
+            st.metric("Total Value", f"${total_with_cash:,.2f}",
+                     delta=f"{summary['total_pnl_pct']:+.2f}%")
+        with metric_cols[1]:
+            st.metric("Invested", f"${total_invested:,.2f}")
+        with metric_cols[2]:
+            st.metric("Cash", f"${st.session_state.cash_balance:,.2f}")
+        with metric_cols[3]:
+            st.metric("Annual Income", f"${summary['annual_income']:,.2f}")
+        with metric_cols[4]:
+            st.metric("Yield", f"{summary['portfolio_yield']:.2f}%")
+        with metric_cols[5]:
+            st.metric("Holdings", f"{len(st.session_state.holdings)}")
+
+        # ── Dashboard Sub-tabs ──
+        dash_tab1, dash_tab2, dash_tab3, dash_tab4, dash_tab5 = st.tabs([
+            "📈 Performance",
+            "⚠️ Risk Analytics",
+            "⚖️ Rebalancing",
+            "💰 Dividends",
+            "🤖 AI Insights"
+        ])
+
+        # ══════════════════════════════════════════════
+        # PERFORMANCE TAB
+        # ══════════════════════════════════════════════
+        with dash_tab1:
+            st.markdown("#### Portfolio Performance")
+
+            # Top/Bottom Performers
+            perf_col1, perf_col2 = st.columns(2)
+
+            sorted_by_gain = sorted(st.session_state.holdings,
+                                   key=lambda h: h.gain_loss_pct, reverse=True)
+
+            with perf_col1:
+                st.markdown("**🚀 Top Performers**")
+                for h in sorted_by_gain[:5]:
+                    color = "#00C853" if h.gain_loss_pct >= 0 else "#FF5252"
+                    st.markdown(f"""
+                    <div style='display: flex; justify-content: space-between; padding: 8px;
+                                background: #2E2E2E; border-radius: 5px; margin: 4px 0;
+                                border-left: 3px solid {color};'>
+                        <span><b>{h.symbol}</b> - {h.name[:20]}</span>
+                        <span style='color: {color};'>{h.gain_loss_pct:+.2f}%</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            with perf_col2:
+                st.markdown("**📉 Bottom Performers**")
+                for h in sorted_by_gain[-5:][::-1]:
+                    color = "#00C853" if h.gain_loss_pct >= 0 else "#FF5252"
+                    st.markdown(f"""
+                    <div style='display: flex; justify-content: space-between; padding: 8px;
+                                background: #2E2E2E; border-radius: 5px; margin: 4px 0;
+                                border-left: 3px solid {color};'>
+                        <span><b>{h.symbol}</b> - {h.name[:20]}</span>
+                        <span style='color: {color};'>{h.gain_loss_pct:+.2f}%</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            # Holdings by Value Chart
+            st.markdown("---")
+            st.markdown("#### Holdings by Value")
+            holdings_sorted = sorted(st.session_state.holdings,
+                                    key=lambda h: h.market_value, reverse=True)
+
+            fig_bar = go.Figure(data=[
+                go.Bar(
+                    x=[h.symbol for h in holdings_sorted[:15]],
+                    y=[h.market_value for h in holdings_sorted[:15]],
+                    marker_color=[get_company_color(h.symbol) for h in holdings_sorted[:15]],
+                    hovertemplate='<b>%{x}</b><br>Value: $%{y:,.2f}<extra></extra>'
+                )
+            ])
+            fig_bar.update_layout(
+                paper_bgcolor=CHART_BG_COLOR,
+                plot_bgcolor=CHART_FACE_COLOR,
+                font=dict(color='white'),
+                height=350,
+                xaxis_title="Symbol",
+                yaxis_title="Market Value ($)",
+                showlegend=False
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+        # ══════════════════════════════════════════════
+        # RISK ANALYTICS TAB
+        # ══════════════════════════════════════════════
+        with dash_tab2:
+            st.markdown("#### Risk Analytics")
+
+            # Calculate risk metrics
+            returns = []
+            betas = []
+            weights = []
+            for h in st.session_state.holdings:
+                weight = h.market_value / total_invested if total_invested > 0 else 0
+                weights.append(weight)
+                betas.append(h.beta if h.beta else 1.0)
+                # Estimate daily return from gain/loss (simplified)
+                if h.cost_basis > 0:
+                    total_return = h.gain_loss_pct / 100
+                    # Assume held for average 1 year, estimate daily
+                    returns.append(total_return)
+
+            # Portfolio Beta
+            portfolio_beta = sum(w * b for w, b in zip(weights, betas))
+
+            # Simple risk metrics
+            if returns:
+                avg_return = np.mean(returns)
+                volatility = np.std(returns) if len(returns) > 1 else 0.15
+                # Sharpe Ratio (assuming 4.5% risk-free rate)
+                risk_free = 0.045
+                sharpe = (avg_return - risk_free) / volatility if volatility > 0 else 0
+
+                # Max Drawdown (simplified - based on individual holdings)
+                max_dd = min(h.gain_loss_pct for h in st.session_state.holdings)
+
+                # Value at Risk (95% confidence, simplified)
+                var_95 = total_invested * volatility * 1.645
+            else:
+                avg_return = 0
+                volatility = 0
+                sharpe = 0
+                max_dd = 0
+                var_95 = 0
+
+            # Display Risk Metrics
+            risk_cols = st.columns(5)
+            with risk_cols[0]:
+                beta_color = "inverse" if portfolio_beta > 1.2 else "normal" if portfolio_beta > 0.8 else "off"
+                st.metric("Portfolio Beta", f"{portfolio_beta:.2f}",
+                         delta="High Risk" if portfolio_beta > 1.2 else "Low Risk" if portfolio_beta < 0.8 else "Moderate",
+                         delta_color=beta_color)
+            with risk_cols[1]:
+                sharpe_color = "normal" if sharpe > 1 else "off" if sharpe > 0 else "inverse"
+                st.metric("Sharpe Ratio", f"{sharpe:.2f}",
+                         delta="Good" if sharpe > 1 else "Fair" if sharpe > 0 else "Poor",
+                         delta_color=sharpe_color)
+            with risk_cols[2]:
+                st.metric("Volatility", f"{volatility*100:.1f}%")
+            with risk_cols[3]:
+                st.metric("Max Drawdown", f"{max_dd:.1f}%",
+                         delta_color="inverse" if max_dd < -20 else "normal")
+            with risk_cols[4]:
+                st.metric("VaR (95%)", f"${var_95:,.0f}",
+                         help="Maximum expected loss in a day with 95% confidence")
+
+            st.markdown("---")
+
+            # Concentration Risk
+            st.markdown("#### Concentration Risk")
+            top_5_weight = sum(sorted(weights, reverse=True)[:5]) * 100
+
+            conc_col1, conc_col2 = st.columns(2)
+            with conc_col1:
+                st.metric("Top 5 Holdings Weight", f"{top_5_weight:.1f}%",
+                         delta="Concentrated" if top_5_weight > 50 else "Diversified",
+                         delta_color="inverse" if top_5_weight > 50 else "normal")
+
+            with conc_col2:
+                # Sector concentration
+                sectors = {}
+                for h in st.session_state.holdings:
+                    sector = h.sector or "Unknown"
+                    weight = h.market_value / total_invested * 100 if total_invested > 0 else 0
+                    sectors[sector] = sectors.get(sector, 0) + weight
+
+                if sectors:
+                    top_sector = max(sectors.items(), key=lambda x: x[1])
+                    st.metric(f"Top Sector: {top_sector[0]}", f"{top_sector[1]:.1f}%")
+
+            # Risk gauge chart
+            fig_gauge = go.Figure(go.Indicator(
+                mode="gauge+number+delta",
+                value=portfolio_beta * 50,
+                domain={'x': [0, 1], 'y': [0, 1]},
+                title={'text': "Risk Level", 'font': {'color': 'white'}},
+                delta={'reference': 50, 'increasing': {'color': "#FF5252"}, 'decreasing': {'color': "#00C853"}},
+                gauge={
+                    'axis': {'range': [0, 100], 'tickcolor': 'white'},
+                    'bar': {'color': "#4da6ff"},
+                    'bgcolor': CHART_FACE_COLOR,
+                    'steps': [
+                        {'range': [0, 33], 'color': '#00C853'},
+                        {'range': [33, 66], 'color': '#FFB300'},
+                        {'range': [66, 100], 'color': '#FF5252'}
+                    ],
+                    'threshold': {
+                        'line': {'color': "white", 'width': 4},
+                        'thickness': 0.75,
+                        'value': portfolio_beta * 50
+                    }
+                }
+            ))
+            fig_gauge.update_layout(
+                paper_bgcolor=CHART_BG_COLOR,
+                font=dict(color='white'),
+                height=300
+            )
+            st.plotly_chart(fig_gauge, use_container_width=True)
+
+        # ══════════════════════════════════════════════
+        # REBALANCING TAB
+        # ══════════════════════════════════════════════
+        with dash_tab3:
+            st.markdown("#### Portfolio Rebalancing Tool")
+            st.caption("Set target allocations and see suggested trades to rebalance")
+
+            # Initialize target allocations
+            if "target_allocations" not in st.session_state:
+                st.session_state.target_allocations = {}
+
+            # Current allocations
+            current_alloc = {}
+            for h in st.session_state.holdings:
+                current_alloc[h.symbol] = {
+                    "weight": h.market_value / total_invested * 100 if total_invested > 0 else 0,
+                    "value": h.market_value,
+                    "price": h.current_price
+                }
+
+            # Set targets
+            st.markdown("**Set Target Allocations (%)**")
+            target_cols = st.columns(4)
+            new_targets = {}
+            for i, h in enumerate(st.session_state.holdings):
+                with target_cols[i % 4]:
+                    default_target = st.session_state.target_allocations.get(h.symbol, current_alloc[h.symbol]["weight"])
+                    new_targets[h.symbol] = st.number_input(
+                        f"{h.symbol}",
+                        min_value=0.0,
+                        max_value=100.0,
+                        value=float(default_target),
+                        step=1.0,
+                        key=f"target_{h.symbol}"
+                    )
+
+            total_target = sum(new_targets.values())
+            if abs(total_target - 100) > 0.1:
+                st.warning(f"Target allocations sum to {total_target:.1f}% (should be 100%)")
+            else:
+                st.success("Target allocations sum to 100%")
+
+            if st.button("Calculate Rebalancing Trades", key="calc_rebal"):
+                st.session_state.target_allocations = new_targets
+
+                st.markdown("---")
+                st.markdown("**Suggested Trades:**")
+
+                trades = []
+                for symbol, target_pct in new_targets.items():
+                    current = current_alloc[symbol]
+                    diff_pct = target_pct - current["weight"]
+                    diff_value = (diff_pct / 100) * total_invested
+                    shares_to_trade = diff_value / current["price"] if current["price"] > 0 else 0
+
+                    if abs(diff_pct) > 0.5:  # Only show if difference > 0.5%
+                        action = "BUY" if diff_pct > 0 else "SELL"
+                        color = "#00C853" if diff_pct > 0 else "#FF5252"
+                        trades.append({
+                            "symbol": symbol,
+                            "action": action,
+                            "shares": abs(shares_to_trade),
+                            "value": abs(diff_value),
+                            "diff_pct": diff_pct,
+                            "color": color
+                        })
+
+                if trades:
+                    for trade in sorted(trades, key=lambda x: abs(x["diff_pct"]), reverse=True):
+                        st.markdown(f"""
+                        <div style='display: flex; justify-content: space-between; padding: 12px;
+                                    background: #2E2E2E; border-radius: 5px; margin: 6px 0;
+                                    border-left: 4px solid {trade["color"]};'>
+                            <span><b>{trade["action"]}</b> {trade["shares"]:.2f} shares of <b>{trade["symbol"]}</b></span>
+                            <span style='color: {trade["color"]};'>${trade["value"]:,.2f} ({trade["diff_pct"]:+.1f}%)</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+                else:
+                    st.success("Your portfolio is already balanced!")
+
+        # ══════════════════════════════════════════════
+        # DIVIDEND TRACKER TAB
+        # ══════════════════════════════════════════════
+        with dash_tab4:
+            st.markdown("#### Dividend Tracker")
+
+            # Monthly income projection
+            monthly_income = summary["annual_income"] / 12
+
+            div_metric_cols = st.columns(4)
+            with div_metric_cols[0]:
+                st.metric("Annual Dividend Income", f"${summary['annual_income']:,.2f}")
+            with div_metric_cols[1]:
+                st.metric("Monthly Income", f"${monthly_income:,.2f}")
+            with div_metric_cols[2]:
+                st.metric("Portfolio Yield", f"{summary['portfolio_yield']:.2f}%")
+            with div_metric_cols[3]:
+                dividend_payers = sum(1 for h in st.session_state.holdings if h.dividend_yield > 0)
+                st.metric("Dividend Payers", f"{dividend_payers}/{len(st.session_state.holdings)}")
+
+            st.markdown("---")
+
+            # Dividend by holding
+            st.markdown("**Dividend Income by Holding**")
+            div_data = []
+            for h in st.session_state.holdings:
+                annual_div = h.market_value * h.dividend_yield
+                div_data.append({
+                    "Symbol": h.symbol,
+                    "Name": h.name[:25],
+                    "Yield": f"{h.dividend_yield*100:.2f}%",
+                    "Annual Income": f"${annual_div:,.2f}",
+                    "Monthly": f"${annual_div/12:,.2f}",
+                    "value": annual_div
+                })
+
+            div_data_sorted = sorted(div_data, key=lambda x: x["value"], reverse=True)
+
+            # Top dividend payers chart
+            top_div = [d for d in div_data_sorted if d["value"] > 0][:10]
+            if top_div:
+                fig_div = go.Figure(data=[
+                    go.Bar(
+                        x=[d["Symbol"] for d in top_div],
+                        y=[d["value"] for d in top_div],
+                        marker_color='#4da6ff',
+                        hovertemplate='<b>%{x}</b><br>Annual: $%{y:,.2f}<extra></extra>'
+                    )
+                ])
+                fig_div.update_layout(
+                    title="Top Dividend Contributors",
+                    paper_bgcolor=CHART_BG_COLOR,
+                    plot_bgcolor=CHART_FACE_COLOR,
+                    font=dict(color='white'),
+                    height=300,
+                    xaxis_title="Symbol",
+                    yaxis_title="Annual Dividend ($)"
+                )
+                st.plotly_chart(fig_div, use_container_width=True)
+
+            # Dividend table
+            st.dataframe(
+                pd.DataFrame(div_data_sorted)[["Symbol", "Name", "Yield", "Annual Income", "Monthly"]],
+                use_container_width=True,
+                hide_index=True
+            )
+
+        # ══════════════════════════════════════════════
+        # AI INSIGHTS TAB
+        # ══════════════════════════════════════════════
+        with dash_tab5:
+            st.markdown("#### AI Portfolio Insights")
+            st.caption("Smart analysis of your portfolio health and opportunities")
+
+            # Generate insights
+            insights = []
+
+            # Portfolio Health Score (0-100)
+            health_score = 70  # Base score
+
+            # Diversification check
+            num_holdings = len(st.session_state.holdings)
+            if num_holdings < 5:
+                insights.append({
+                    "type": "warning",
+                    "title": "Low Diversification",
+                    "text": f"You only have {num_holdings} holdings. Consider adding more positions for better diversification.",
+                    "impact": -10
+                })
+            elif num_holdings >= 15:
+                insights.append({
+                    "type": "positive",
+                    "title": "Well Diversified",
+                    "text": f"Your portfolio has {num_holdings} holdings, providing good diversification.",
+                    "impact": 10
+                })
+
+            # Concentration check
+            if weights and max(weights) > 0.25:
+                top_holding = max(st.session_state.holdings, key=lambda h: h.market_value)
+                insights.append({
+                    "type": "warning",
+                    "title": "High Concentration",
+                    "text": f"{top_holding.symbol} represents {max(weights)*100:.1f}% of your portfolio. Consider rebalancing.",
+                    "impact": -10
+                })
+
+            # Yield analysis
+            if summary['portfolio_yield'] > 4:
+                insights.append({
+                    "type": "positive",
+                    "title": "Strong Income Generation",
+                    "text": f"Your {summary['portfolio_yield']:.2f}% yield provides excellent passive income.",
+                    "impact": 10
+                })
+            elif summary['portfolio_yield'] < 1:
+                insights.append({
+                    "type": "info",
+                    "title": "Low Dividend Focus",
+                    "text": "Your portfolio is growth-focused with minimal dividend income.",
+                    "impact": 0
+                })
+
+            # Beta/Risk analysis
+            if portfolio_beta > 1.3:
+                insights.append({
+                    "type": "warning",
+                    "title": "High Market Risk",
+                    "text": f"Portfolio beta of {portfolio_beta:.2f} means higher volatility than the market.",
+                    "impact": -5
+                })
+            elif portfolio_beta < 0.7:
+                insights.append({
+                    "type": "positive",
+                    "title": "Defensive Positioning",
+                    "text": f"Low beta of {portfolio_beta:.2f} provides protection in market downturns.",
+                    "impact": 5
+                })
+
+            # Winners/Losers analysis
+            big_winners = [h for h in st.session_state.holdings if h.gain_loss_pct > 50]
+            big_losers = [h for h in st.session_state.holdings if h.gain_loss_pct < -20]
+
+            if big_winners:
+                insights.append({
+                    "type": "positive",
+                    "title": "Strong Performers",
+                    "text": f"You have {len(big_winners)} holding(s) up more than 50%. Consider taking some profits.",
+                    "impact": 5
+                })
+
+            if big_losers:
+                insights.append({
+                    "type": "negative",
+                    "title": "Underperformers",
+                    "text": f"You have {len(big_losers)} holding(s) down more than 20%. Review your thesis on these positions.",
+                    "impact": -5
+                })
+
+            # Cash position
+            cash_pct = st.session_state.cash_balance / total_with_cash * 100 if total_with_cash > 0 else 0
+            if cash_pct > 20:
+                insights.append({
+                    "type": "info",
+                    "title": "High Cash Position",
+                    "text": f"You have {cash_pct:.1f}% in cash. Consider deploying capital or keeping as dry powder.",
+                    "impact": 0
+                })
+            elif cash_pct < 5:
+                insights.append({
+                    "type": "info",
+                    "title": "Fully Invested",
+                    "text": "Nearly all capital is deployed. Keep some cash for opportunities.",
+                    "impact": 0
+                })
+
+            # Calculate final health score
+            for insight in insights:
+                health_score += insight.get("impact", 0)
+            health_score = max(0, min(100, health_score))
+
+            # Display Health Score
+            if health_score >= 80:
+                health_class = "health-excellent"
+                health_label = "Excellent"
+            elif health_score >= 60:
+                health_class = "health-good"
+                health_label = "Good"
+            elif health_score >= 40:
+                health_class = "health-fair"
+                health_label = "Fair"
+            else:
+                health_class = "health-poor"
+                health_label = "Needs Attention"
+
+            st.markdown(f"""
+            <div style='text-align: center; padding: 20px; background: #2E2E2E; border-radius: 10px; margin-bottom: 20px;'>
+                <h2 class='{health_class}' style='margin: 0;'>Portfolio Health: {health_score}/100</h2>
+                <p style='color: #888; margin: 5px 0;'>{health_label}</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Display Insights
+            st.markdown("**Key Insights:**")
+            for insight in insights:
+                icon = {"positive": "✅", "warning": "⚠️", "negative": "❌", "info": "ℹ️"}.get(insight["type"], "•")
+                css_class = f"insight-{insight['type']}"
+                st.markdown(f"""
+                <div class='insight-card {css_class}'>
+                    <b>{icon} {insight["title"]}</b><br>
+                    <span style='color: #ccc;'>{insight["text"]}</span>
+                </div>
+                """, unsafe_allow_html=True)
+
+            # Recommendations
+            st.markdown("---")
+            st.markdown("**Recommendations:**")
+
+            recommendations = []
+            if num_holdings < 10:
+                recommendations.append("📈 Consider adding more positions for diversification")
+            if summary['portfolio_yield'] < 2 and cash_pct < 10:
+                recommendations.append("💰 Add dividend stocks for passive income")
+            if portfolio_beta > 1.2:
+                recommendations.append("🛡️ Add defensive stocks (utilities, consumer staples) to reduce risk")
+            if big_losers:
+                recommendations.append("🔍 Review underperforming positions - cut losses or average down")
+            if cash_pct > 25:
+                recommendations.append("💵 Consider deploying excess cash into quality stocks")
+
+            if recommendations:
+                for rec in recommendations:
+                    st.markdown(f"• {rec}")
+            else:
+                st.success("Your portfolio looks well-balanced! Keep monitoring and stay diversified.")
+
+
+# ═════════════════════════════════════════════
+# TAB: Portfolio Manager
 # ═════════════════════════════════════════════
 
 with tab_portfolio:
