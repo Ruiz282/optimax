@@ -600,6 +600,55 @@ with tab_dashboard:
             )
             st.plotly_chart(fig_gauge, use_container_width=True)
 
+            # ── Individual Stock Risk Lookup ──
+            st.markdown("---")
+            st.markdown("#### Individual Stock Risk Lookup")
+            st.caption("Search for any stock to see its risk metrics")
+
+            stock_search = st.text_input("Enter Stock Symbol", placeholder="TSLA", key="risk_stock_search").upper().strip()
+
+            if stock_search:
+                with st.spinner(f"Fetching risk data for {stock_search}..."):
+                    try:
+                        stock_data = fetch_security_data(stock_search)
+                        if stock_data:
+                            stock_risk_cols = st.columns(5)
+                            with stock_risk_cols[0]:
+                                st.metric("Symbol", stock_search)
+                            with stock_risk_cols[1]:
+                                st.metric("Price", f"${stock_data['current_price']:,.2f}")
+                            with stock_risk_cols[2]:
+                                beta_val = stock_data.get('beta', 1.0) or 1.0
+                                st.metric("Beta", f"{beta_val:.2f}",
+                                         delta="High" if beta_val > 1.2 else "Low" if beta_val < 0.8 else "Moderate")
+                            with stock_risk_cols[3]:
+                                high_52 = stock_data.get('fifty_two_week_high', 0)
+                                low_52 = stock_data.get('fifty_two_week_low', 0)
+                                if high_52 and low_52:
+                                    volatility_est = ((high_52 - low_52) / low_52) * 100 if low_52 > 0 else 0
+                                    st.metric("52W Range", f"{volatility_est:.1f}%")
+                                else:
+                                    st.metric("52W Range", "N/A")
+                            with stock_risk_cols[4]:
+                                div_yield = stock_data.get('dividend_yield', 0) or 0
+                                st.metric("Yield", f"{div_yield*100:.2f}%")
+
+                            # Additional info
+                            st.markdown(f"**{stock_data.get('name', stock_search)}** | Sector: {stock_data.get('sector', 'N/A')}")
+
+                            # Risk assessment
+                            beta_val = stock_data.get('beta', 1.0) or 1.0
+                            if beta_val > 1.5:
+                                st.warning(f"⚠️ High volatility stock (Beta: {beta_val:.2f}). Expect larger swings than the market.")
+                            elif beta_val < 0.7:
+                                st.success(f"🛡️ Defensive stock (Beta: {beta_val:.2f}). Lower volatility than the market.")
+                            else:
+                                st.info(f"📊 Moderate risk (Beta: {beta_val:.2f}). Moves roughly with the market.")
+                        else:
+                            st.error(f"Could not find {stock_search}")
+                    except Exception as e:
+                        st.error(f"Error fetching data: {e}")
+
         # ══════════════════════════════════════════════
         # REBALANCING TAB
         # ══════════════════════════════════════════════
@@ -915,6 +964,80 @@ with tab_dashboard:
                     st.markdown(f"• {rec}")
             else:
                 st.success("Your portfolio looks well-balanced! Keep monitoring and stay diversified.")
+
+            # ── Suggested Stocks ──
+            st.markdown("---")
+            st.markdown("#### Suggested Stocks to Consider")
+            st.caption("Based on your portfolio composition and market conditions")
+
+            # Generate suggestions based on portfolio analysis
+            suggested_stocks = []
+
+            # Get current holdings symbols
+            current_symbols = [h.symbol for h in st.session_state.holdings]
+
+            # Dividend suggestions if yield is low
+            if summary['portfolio_yield'] < 3:
+                dividend_picks = [
+                    {"symbol": "SCHD", "name": "Schwab US Dividend Equity ETF", "reason": "High-quality dividend stocks", "yield": "3.5%"},
+                    {"symbol": "VYM", "name": "Vanguard High Dividend Yield ETF", "reason": "Diversified dividend exposure", "yield": "3.0%"},
+                    {"symbol": "O", "name": "Realty Income Corp", "reason": "Monthly dividend REIT", "yield": "5.5%"},
+                    {"symbol": "JNJ", "name": "Johnson & Johnson", "reason": "Dividend aristocrat, defensive", "yield": "3.0%"},
+                ]
+                for pick in dividend_picks:
+                    if pick["symbol"] not in current_symbols:
+                        suggested_stocks.append({**pick, "category": "💰 Dividend"})
+
+            # Defensive suggestions if beta is high
+            if portfolio_beta > 1.1:
+                defensive_picks = [
+                    {"symbol": "XLU", "name": "Utilities Select Sector ETF", "reason": "Low beta, stable sector", "yield": "3.2%"},
+                    {"symbol": "PG", "name": "Procter & Gamble", "reason": "Consumer staples, recession-resistant", "yield": "2.4%"},
+                    {"symbol": "KO", "name": "Coca-Cola", "reason": "Defensive dividend stock", "yield": "3.1%"},
+                    {"symbol": "WMT", "name": "Walmart", "reason": "Retail staple, low beta", "yield": "1.4%"},
+                ]
+                for pick in defensive_picks:
+                    if pick["symbol"] not in current_symbols:
+                        suggested_stocks.append({**pick, "category": "🛡️ Defensive"})
+
+            # Growth suggestions if portfolio is conservative
+            if portfolio_beta < 0.9:
+                growth_picks = [
+                    {"symbol": "QQQ", "name": "Invesco QQQ Trust", "reason": "Tech exposure, growth potential", "yield": "0.5%"},
+                    {"symbol": "NVDA", "name": "NVIDIA", "reason": "AI leader, high growth", "yield": "0.03%"},
+                    {"symbol": "MSFT", "name": "Microsoft", "reason": "Quality tech, AI exposure", "yield": "0.7%"},
+                    {"symbol": "GOOGL", "name": "Alphabet", "reason": "Search & cloud leader", "yield": "0%"},
+                ]
+                for pick in growth_picks:
+                    if pick["symbol"] not in current_symbols:
+                        suggested_stocks.append({**pick, "category": "📈 Growth"})
+
+            # Diversification suggestions
+            current_sectors = set(h.sector for h in st.session_state.holdings if h.sector)
+            if "Healthcare" not in current_sectors:
+                suggested_stocks.append({"symbol": "XLV", "name": "Health Care Select Sector ETF", "reason": "Healthcare sector exposure", "yield": "1.5%", "category": "🏥 Healthcare"})
+            if "Financial Services" not in current_sectors and "Financials" not in current_sectors:
+                suggested_stocks.append({"symbol": "XLF", "name": "Financial Select Sector ETF", "reason": "Financials sector exposure", "yield": "1.8%", "category": "🏦 Financials"})
+
+            # Display suggestions
+            if suggested_stocks:
+                for stock in suggested_stocks[:8]:  # Show top 8 suggestions
+                    st.markdown(f"""
+                    <div style='display: flex; justify-content: space-between; padding: 12px;
+                                background: #2E2E2E; border-radius: 8px; margin: 6px 0;
+                                border-left: 4px solid #4da6ff;'>
+                        <div>
+                            <span style='color: #888; font-size: 0.85em;'>{stock['category']}</span><br>
+                            <b>{stock['symbol']}</b> - {stock['name']}<br>
+                            <span style='color: #aaa; font-size: 0.9em;'>{stock['reason']}</span>
+                        </div>
+                        <div style='text-align: right;'>
+                            <span style='color: #4da6ff;'>Yield: {stock['yield']}</span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.info("Your portfolio is well-diversified! No specific suggestions at this time.")
 
 
 # ═════════════════════════════════════════════
@@ -1971,7 +2094,7 @@ with tab_cash:
     if "cash_balance" not in st.session_state:
         st.session_state.cash_balance = 0.0
 
-    cash_tab1, cash_tab2 = st.tabs(["Cash Holdings", "Money Market Calculator"])
+    cash_tab1, cash_tab2, cash_tab3 = st.tabs(["Cash Holdings", "Money Market Calculator", "Best Yields"])
 
     with cash_tab1:
         st.markdown("### Cash Holdings")
@@ -2132,6 +2255,82 @@ with tab_cash:
             st.info(f"At {mm_rate}% APY with ${mm_contribution:,.0f}/month contributions, "
                     f"your ${mm_initial:,.0f} grows to **${balance:,.0f}** in {mm_years} years. "
                     f"Interest earned: **${total_interest:,.0f}**")
+
+    with cash_tab3:
+        st.markdown("### Best Money Market & Savings Yields")
+        st.caption("Current top yields from banks and brokerages (rates as of 2024)")
+
+        # Best yields data (this would ideally come from an API, but using static data for demo)
+        best_yields = [
+            {"name": "Vanguard Federal Money Market (VMFXX)", "type": "Money Market Fund", "apy": 5.28, "min": "$3,000", "notes": "Brokerage account required"},
+            {"name": "Fidelity Money Market (SPAXX)", "type": "Money Market Fund", "apy": 4.98, "min": "$0", "notes": "Fidelity account required"},
+            {"name": "Schwab Value Advantage Money (SWVXX)", "type": "Money Market Fund", "apy": 5.14, "min": "$0", "notes": "Schwab account required"},
+            {"name": "Wealthfront Cash Account", "type": "High-Yield Savings", "apy": 5.00, "min": "$0", "notes": "FDIC insured up to $8M"},
+            {"name": "Marcus by Goldman Sachs", "type": "High-Yield Savings", "apy": 4.50, "min": "$0", "notes": "FDIC insured"},
+            {"name": "Ally Bank Savings", "type": "High-Yield Savings", "apy": 4.25, "min": "$0", "notes": "No monthly fees"},
+            {"name": "Capital One 360", "type": "High-Yield Savings", "apy": 4.25, "min": "$0", "notes": "FDIC insured"},
+            {"name": "SoFi Checking & Savings", "type": "High-Yield Savings", "apy": 4.60, "min": "$0", "notes": "With direct deposit"},
+            {"name": "Betterment Cash Reserve", "type": "Cash Management", "apy": 4.75, "min": "$0", "notes": "FDIC insured up to $2M"},
+            {"name": "Treasury Bills (4-Week)", "type": "Government", "apy": 5.25, "min": "$100", "notes": "State tax exempt"},
+        ]
+
+        # Sort by APY
+        best_yields.sort(key=lambda x: x["apy"], reverse=True)
+
+        # Display best yields
+        st.markdown("#### Top Yields Available")
+
+        for i, item in enumerate(best_yields):
+            if i < 3:
+                badge = "🥇" if i == 0 else "🥈" if i == 1 else "🥉"
+            else:
+                badge = ""
+
+            color = "#00C853" if item["apy"] >= 5.0 else "#4da6ff" if item["apy"] >= 4.5 else "#FFB300"
+
+            st.markdown(f"""
+            <div style='display: flex; justify-content: space-between; padding: 14px;
+                        background: #2E2E2E; border-radius: 8px; margin: 8px 0;
+                        border-left: 4px solid {color};'>
+                <div>
+                    <b>{badge} {item['name']}</b><br>
+                    <span style='color: #888; font-size: 0.9em;'>{item['type']} • Min: {item['min']}</span><br>
+                    <span style='color: #aaa; font-size: 0.85em;'>{item['notes']}</span>
+                </div>
+                <div style='text-align: right;'>
+                    <span style='color: {color}; font-size: 1.4em; font-weight: bold;'>{item['apy']:.2f}%</span><br>
+                    <span style='color: #888; font-size: 0.85em;'>APY</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("---")
+
+        # Calculator with best rate
+        st.markdown("#### Quick Calculator with Best Rate")
+        calc_col1, calc_col2 = st.columns(2)
+
+        with calc_col1:
+            calc_amount = st.number_input("Amount to Invest ($)", min_value=0.0, value=10000.0, step=1000.0, key="best_yield_calc")
+
+        with calc_col2:
+            best_rate = best_yields[0]["apy"]
+            st.metric("Best Current Rate", f"{best_rate:.2f}%", delta=best_yields[0]["name"][:30])
+
+        if calc_amount > 0:
+            annual_earnings = calc_amount * (best_rate / 100)
+            monthly_earnings = annual_earnings / 12
+
+            earn_cols = st.columns(3)
+            with earn_cols[0]:
+                st.metric("Monthly Earnings", f"${monthly_earnings:,.2f}")
+            with earn_cols[1]:
+                st.metric("Annual Earnings", f"${annual_earnings:,.2f}")
+            with earn_cols[2]:
+                five_year = calc_amount * ((1 + best_rate/100) ** 5) - calc_amount
+                st.metric("5-Year Earnings", f"${five_year:,.2f}")
+
+        st.caption("⚠️ Rates change frequently. Always verify current rates before opening accounts.")
 
 
 # ═════════════════════════════════════════════
