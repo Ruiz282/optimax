@@ -497,7 +497,7 @@ with tab_dashboard:
                 weights.append(weight)
                 betas.append(h.beta if h.beta else 1.0)
                 # Estimate daily return from gain/loss (simplified)
-                if h.cost_basis > 0:
+                if h.total_cost > 0:
                     total_return = h.unrealized_pnl_pct / 100
                     # Assume held for average 1 year, estimate daily
                     returns.append(total_return)
