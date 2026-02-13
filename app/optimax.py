@@ -4552,10 +4552,10 @@ with tab_valuation:
 
                         with dcf_col1:
                             st.markdown("**Assumptions**")
-                            fcf_growth_rate = st.slider("FCF Growth Rate (Years 1-5)", 0.0, 30.0, 10.0, 1.0, key="fcf_growth") / 100
-                            terminal_growth = st.slider("Terminal Growth Rate", 0.0, 5.0, 2.5, 0.5, key="term_growth") / 100
-                            discount_rate = st.slider("Discount Rate (WACC)", 5.0, 15.0, 10.0, 0.5, key="wacc") / 100
-                            projection_years = st.selectbox("Projection Years", [5, 7, 10], index=0, key="proj_years")
+                            fcf_growth_rate = st.number_input("FCF Growth Rate % (Years 1-5)", min_value=0.0, max_value=50.0, value=10.0, step=0.5, key="fcf_growth") / 100
+                            terminal_growth = st.number_input("Terminal Growth Rate %", min_value=0.0, max_value=5.0, value=2.5, step=0.1, key="term_growth") / 100
+                            discount_rate = st.number_input("Discount Rate (WACC) %", min_value=1.0, max_value=25.0, value=10.0, step=0.5, key="wacc") / 100
+                            projection_years = st.number_input("Projection Years", min_value=3, max_value=15, value=5, step=1, key="proj_years")
 
                         with dcf_col2:
                             st.markdown("**Current Financials**")
