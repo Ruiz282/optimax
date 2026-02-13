@@ -284,19 +284,28 @@ def fetch_security_data(symbol: str) -> Optional[Dict]:
         if current_price is None:
             return None
 
-        # Get dividend info
-        dividend_yield = info.get("dividendYield") or info.get("yield") or 0
-        if dividend_yield and dividend_yield > 1:  # Sometimes returned as percentage
-            dividend_yield = dividend_yield / 100
-
+        # Get dividend info - use trailingAnnualDividendYield first (most reliable)
         dividend_rate = info.get("dividendRate") or info.get("trailingAnnualDividendRate") or 0
 
-        # If we have yield but no rate, calculate it
+        # trailingAnnualDividendYield is most reliable (always decimal like 0.0066 = 0.66%)
+        trailing_yield = info.get("trailingAnnualDividendYield") or 0
+
+        if trailing_yield and trailing_yield > 0:
+            dividend_yield = trailing_yield
+        elif dividend_rate > 0 and current_price > 0:
+            # Calculate from rate if available
+            dividend_yield = dividend_rate / current_price
+        else:
+            # Fall back to dividendYield field (less reliable)
+            dividend_yield = info.get("dividendYield") or info.get("yield") or 0
+            # yfinance dividendYield is inconsistent - sometimes 0.0066, sometimes 0.66
+            # If > 0.2 (20%), it's likely already a percentage, so divide by 100
+            if dividend_yield and dividend_yield > 0.2:
+                dividend_yield = dividend_yield / 100
+
+        # Calculate rate if we have yield but no rate
         if dividend_yield > 0 and dividend_rate == 0:
             dividend_rate = current_price * dividend_yield
-        # If we have rate but no yield, calculate it
-        elif dividend_rate > 0 and dividend_yield == 0:
-            dividend_yield = dividend_rate / current_price
 
         return {
             "symbol": symbol.upper(),
