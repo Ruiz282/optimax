@@ -204,6 +204,40 @@ def create_sparkline_svg(prices: list, color: str = "#00ff00", width: int = 80, 
     return svg
 
 
+def show_dollar_spinner(message: str = "Loading...") -> str:
+    """Return HTML for a golden spinning dollar sign animation."""
+    return f"""
+    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px;">
+        <style>
+            @keyframes spin {{
+                0% {{ transform: rotateY(0deg); }}
+                100% {{ transform: rotateY(360deg); }}
+            }}
+            @keyframes glow {{
+                0%, 100% {{ text-shadow: 0 0 20px #FFD700, 0 0 40px #FFA500, 0 0 60px #FF8C00; }}
+                50% {{ text-shadow: 0 0 30px #FFD700, 0 0 60px #FFA500, 0 0 90px #FF8C00; }}
+            }}
+            .dollar-spin {{
+                font-size: 80px;
+                color: #FFD700;
+                animation: spin 1s linear infinite, glow 2s ease-in-out infinite;
+                display: inline-block;
+                font-weight: bold;
+                font-family: 'Arial Black', sans-serif;
+            }}
+            .loading-text {{
+                color: #FFD700;
+                font-size: 18px;
+                margin-top: 20px;
+                animation: glow 2s ease-in-out infinite;
+            }}
+        </style>
+        <div class="dollar-spin">$</div>
+        <div class="loading-text">{message}</div>
+    </div>
+    """
+
+
 def get_tax_loss_opportunities(holdings: list, tax_rate: float = 0.25) -> list:
     """Identify tax-loss harvesting opportunities."""
     opportunities = []
@@ -1148,232 +1182,239 @@ with tab_dashboard:
             stock_search = st.text_input("Enter Stock Symbol", placeholder="TSLA", key="risk_stock_search").upper().strip()
 
             if stock_search:
-                with st.spinner(f"Fetching risk data for {stock_search}..."):
-                    try:
-                        stock_data = fetch_security_data(stock_search)
-                        if stock_data:
-                            stock_risk_cols = st.columns(5)
-                            with stock_risk_cols[0]:
-                                st.metric("Symbol", stock_search)
-                            with stock_risk_cols[1]:
-                                st.metric("Price", f"${stock_data['current_price']:,.2f}")
-                            with stock_risk_cols[2]:
-                                beta_val = stock_data.get('beta', 1.0) or 1.0
-                                st.metric("Beta", f"{beta_val:.2f}",
-                                         delta="High" if beta_val > 1.2 else "Low" if beta_val < 0.8 else "Moderate")
-                            with stock_risk_cols[3]:
-                                high_52 = stock_data.get('fifty_two_week_high', 0)
-                                low_52 = stock_data.get('fifty_two_week_low', 0)
-                                if high_52 and low_52:
-                                    volatility_est = ((high_52 - low_52) / low_52) * 100 if low_52 > 0 else 0
-                                    st.metric("52W Range", f"{volatility_est:.1f}%")
-                                else:
-                                    st.metric("52W Range", "N/A")
-                            with stock_risk_cols[4]:
-                                div_yield = stock_data.get('dividend_yield', 0) or 0
-                                st.metric("Yield", f"{div_yield*100:.2f}%")
+                # Show golden dollar spinner while loading
+                loading_placeholder = st.empty()
+                loading_placeholder.markdown(show_dollar_spinner(f"Analyzing {stock_search}..."), unsafe_allow_html=True)
 
-                            # Additional info
-                            st.markdown(f"**{stock_data.get('name', stock_search)}** | Sector: {stock_data.get('sector', 'N/A')}")
+                try:
+                    stock_data = fetch_security_data(stock_search)
+                    # Clear the loading animation
+                    loading_placeholder.empty()
 
-                            st.markdown("---")
-
-                            # Comprehensive Risk Assessment
+                    if stock_data:
+                        stock_risk_cols = st.columns(5)
+                        with stock_risk_cols[0]:
+                            st.metric("Symbol", stock_search)
+                        with stock_risk_cols[1]:
+                            st.metric("Price", f"${stock_data['current_price']:,.2f}")
+                        with stock_risk_cols[2]:
                             beta_val = stock_data.get('beta', 1.0) or 1.0
-                            high_52 = stock_data.get('fifty_two_week_high', 0) or 0
-                            low_52 = stock_data.get('fifty_two_week_low', 0) or 0
-                            current_price = stock_data.get('current_price', 0)
+                            st.metric("Beta", f"{beta_val:.2f}",
+                                     delta="High" if beta_val > 1.2 else "Low" if beta_val < 0.8 else "Moderate")
+                        with stock_risk_cols[3]:
+                            high_52 = stock_data.get('fifty_two_week_high', 0)
+                            low_52 = stock_data.get('fifty_two_week_low', 0)
+                            if high_52 and low_52:
+                                volatility_est = ((high_52 - low_52) / low_52) * 100 if low_52 > 0 else 0
+                                st.metric("52W Range", f"{volatility_est:.1f}%")
+                            else:
+                                st.metric("52W Range", "N/A")
+                        with stock_risk_cols[4]:
                             div_yield = stock_data.get('dividend_yield', 0) or 0
-                            sector = stock_data.get('sector', 'Unknown')
-                            market_cap = stock_data.get('market_cap', 0) or 0
+                            st.metric("Yield", f"{div_yield*100:.2f}%")
 
-                            # Calculate additional metrics
-                            range_52w = ((high_52 - low_52) / low_52 * 100) if low_52 > 0 else 0
-                            distance_from_high = ((high_52 - current_price) / high_52 * 100) if high_52 > 0 else 0
-                            distance_from_low = ((current_price - low_52) / low_52 * 100) if low_52 > 0 else 0
+                        # Additional info
+                        st.markdown(f"**{stock_data.get('name', stock_search)}** | Sector: {stock_data.get('sector', 'N/A')}")
 
-                            st.markdown("#### Detailed Risk Analysis")
+                        st.markdown("---")
 
-                            # Risk factors with explanations
-                            risk_factors = []
-                            positive_factors = []
+                        # Comprehensive Risk Assessment
+                        beta_val = stock_data.get('beta', 1.0) or 1.0
+                        high_52 = stock_data.get('fifty_two_week_high', 0) or 0
+                        low_52 = stock_data.get('fifty_two_week_low', 0) or 0
+                        current_price = stock_data.get('current_price', 0)
+                        div_yield = stock_data.get('dividend_yield', 0) or 0
+                        sector = stock_data.get('sector', 'Unknown')
+                        market_cap = stock_data.get('market_cap', 0) or 0
 
-                            # Beta analysis
-                            if beta_val > 1.5:
+                        # Calculate additional metrics
+                        range_52w = ((high_52 - low_52) / low_52 * 100) if low_52 > 0 else 0
+                        distance_from_high = ((high_52 - current_price) / high_52 * 100) if high_52 > 0 else 0
+                        distance_from_low = ((current_price - low_52) / low_52 * 100) if low_52 > 0 else 0
+
+                        st.markdown("#### Detailed Risk Analysis")
+
+                        # Risk factors with explanations
+                        risk_factors = []
+                        positive_factors = []
+
+                        # Beta analysis
+                        if beta_val > 1.5:
+                            risk_factors.append({
+                                "factor": "High Beta",
+                                "severity": "high",
+                                "explanation": f"Beta of {beta_val:.2f} means this stock is {((beta_val-1)*100):.0f}% more volatile than the market. When the S&P 500 moves 1%, this stock typically moves {beta_val:.1f}%.",
+                                "implication": "Expect significant swings during market volatility. Not suitable for conservative investors."
+                            })
+                        elif beta_val > 1.2:
+                            risk_factors.append({
+                                "factor": "Elevated Beta",
+                                "severity": "medium",
+                                "explanation": f"Beta of {beta_val:.2f} indicates above-average market sensitivity.",
+                                "implication": "Will amplify both gains and losses relative to the market."
+                            })
+                        elif beta_val < 0.6:
+                            positive_factors.append({
+                                "factor": "Low Beta (Defensive)",
+                                "explanation": f"Beta of {beta_val:.2f} means this stock is {((1-beta_val)*100):.0f}% less volatile than the market.",
+                                "implication": "Good for capital preservation, but may lag in bull markets."
+                            })
+
+                        # 52-week range analysis
+                        if range_52w > 80:
+                            risk_factors.append({
+                                "factor": "Extreme Price Swings",
+                                "severity": "high",
+                                "explanation": f"The stock has swung {range_52w:.0f}% between its 52-week high (${high_52:.2f}) and low (${low_52:.2f}).",
+                                "implication": "Highly volatile - could experience dramatic moves in either direction."
+                            })
+                        elif range_52w > 50:
+                            risk_factors.append({
+                                "factor": "Wide Trading Range",
+                                "severity": "medium",
+                                "explanation": f"52-week range of {range_52w:.0f}% indicates significant price movement.",
+                                "implication": "Moderate volatility - typical for growth stocks."
+                            })
+
+                        # Distance from 52-week high/low
+                        if distance_from_high > 30:
+                            risk_factors.append({
+                                "factor": "Far Below 52W High",
+                                "severity": "medium",
+                                "explanation": f"Currently {distance_from_high:.0f}% below its 52-week high of ${high_52:.2f}.",
+                                "implication": "Could be undervalued or in a downtrend. Research why it's down before buying."
+                            })
+                        elif distance_from_high < 5:
+                            positive_factors.append({
+                                "factor": "Near 52W High",
+                                "explanation": f"Trading within 5% of its 52-week high - showing strength.",
+                                "implication": "Momentum is positive, but may face resistance at the high."
+                            })
+
+                        # Sector-specific risks
+                        sector_risks = {
+                            "Technology": "Tech stocks are sensitive to interest rates and growth expectations. High valuations can lead to sharp corrections.",
+                            "Consumer Cyclical": "Highly sensitive to economic cycles. Performs well in expansions, poorly in recessions.",
+                            "Financial Services": "Sensitive to interest rates, credit quality, and regulatory changes.",
+                            "Energy": "Dependent on oil/gas prices, geopolitical events, and energy transition policies.",
+                            "Healthcare": "Regulatory risks, drug approval uncertainty, and political scrutiny on pricing.",
+                            "Real Estate": "Interest rate sensitive. Rising rates typically pressure REIT valuations.",
+                            "Communication Services": "Competitive pressure, content costs, and regulatory scrutiny.",
+                            "Consumer Defensive": "Generally stable but may lag in bull markets. Inflation can pressure margins.",
+                            "Utilities": "Interest rate sensitive but provides stable income. Limited growth potential.",
+                            "Industrials": "Economically sensitive. Trade policies and supply chain issues are key risks.",
+                            "Basic Materials": "Commodity price dependent. Cyclical and economically sensitive.",
+                        }
+
+                        if sector in sector_risks:
+                            risk_factors.append({
+                                "factor": f"{sector} Sector Risk",
+                                "severity": "info",
+                                "explanation": sector_risks[sector],
+                                "implication": "Consider sector concentration in your portfolio."
+                            })
+
+                        # Dividend analysis
+                        if div_yield > 0.05:  # 5%+
+                            risk_factors.append({
+                                "factor": "Very High Dividend Yield",
+                                "severity": "medium",
+                                "explanation": f"Yield of {div_yield*100:.1f}% is unusually high.",
+                                "implication": "Could indicate market expects dividend cut, or stock price has fallen significantly. Verify dividend sustainability."
+                            })
+                        elif div_yield > 0.02:
+                            positive_factors.append({
+                                "factor": "Dividend Income",
+                                "explanation": f"Pays a {div_yield*100:.1f}% dividend yield.",
+                                "implication": "Provides income while you hold. Check dividend growth history."
+                            })
+                        elif div_yield == 0:
+                            risk_factors.append({
+                                "factor": "No Dividend",
+                                "severity": "info",
+                                "explanation": "This stock doesn't pay dividends.",
+                                "implication": "Returns come entirely from price appreciation. Common for growth stocks."
+                            })
+
+                        # Market cap analysis
+                        if market_cap > 0:
+                            if market_cap < 2_000_000_000:  # < $2B
                                 risk_factors.append({
-                                    "factor": "High Beta",
-                                    "severity": "high",
-                                    "explanation": f"Beta of {beta_val:.2f} means this stock is {((beta_val-1)*100):.0f}% more volatile than the market. When the S&P 500 moves 1%, this stock typically moves {beta_val:.1f}%.",
-                                    "implication": "Expect significant swings during market volatility. Not suitable for conservative investors."
-                                })
-                            elif beta_val > 1.2:
-                                risk_factors.append({
-                                    "factor": "Elevated Beta",
+                                    "factor": "Small Cap",
                                     "severity": "medium",
-                                    "explanation": f"Beta of {beta_val:.2f} indicates above-average market sensitivity.",
-                                    "implication": "Will amplify both gains and losses relative to the market."
+                                    "explanation": f"Market cap of ${market_cap/1_000_000_000:.1f}B is considered small cap.",
+                                    "implication": "Higher volatility, less analyst coverage, potential liquidity issues. But also higher growth potential."
                                 })
-                            elif beta_val < 0.6:
+                            elif market_cap > 200_000_000_000:  # > $200B
                                 positive_factors.append({
-                                    "factor": "Low Beta (Defensive)",
-                                    "explanation": f"Beta of {beta_val:.2f} means this stock is {((1-beta_val)*100):.0f}% less volatile than the market.",
-                                    "implication": "Good for capital preservation, but may lag in bull markets."
+                                    "factor": "Mega Cap",
+                                    "explanation": f"Market cap of ${market_cap/1_000_000_000:.0f}B indicates a large, established company.",
+                                    "implication": "More stable, liquid, and well-covered by analysts."
                                 })
 
-                            # 52-week range analysis
-                            if range_52w > 80:
-                                risk_factors.append({
-                                    "factor": "Extreme Price Swings",
-                                    "severity": "high",
-                                    "explanation": f"The stock has swung {range_52w:.0f}% between its 52-week high (${high_52:.2f}) and low (${low_52:.2f}).",
-                                    "implication": "Highly volatile - could experience dramatic moves in either direction."
-                                })
-                            elif range_52w > 50:
-                                risk_factors.append({
-                                    "factor": "Wide Trading Range",
-                                    "severity": "medium",
-                                    "explanation": f"52-week range of {range_52w:.0f}% indicates significant price movement.",
-                                    "implication": "Moderate volatility - typical for growth stocks."
-                                })
+                        # Display risk factors
+                        if risk_factors:
+                            st.markdown("**⚠️ Risk Factors**")
+                            for rf in risk_factors:
+                                if rf["severity"] == "high":
+                                    st.error(f"""
+                                    **{rf['factor']}**
 
-                            # Distance from 52-week high/low
-                            if distance_from_high > 30:
-                                risk_factors.append({
-                                    "factor": "Far Below 52W High",
-                                    "severity": "medium",
-                                    "explanation": f"Currently {distance_from_high:.0f}% below its 52-week high of ${high_52:.2f}.",
-                                    "implication": "Could be undervalued or in a downtrend. Research why it's down before buying."
-                                })
-                            elif distance_from_high < 5:
-                                positive_factors.append({
-                                    "factor": "Near 52W High",
-                                    "explanation": f"Trading within 5% of its 52-week high - showing strength.",
-                                    "implication": "Momentum is positive, but may face resistance at the high."
-                                })
+                                    {rf['explanation']}
 
-                            # Sector-specific risks
-                            sector_risks = {
-                                "Technology": "Tech stocks are sensitive to interest rates and growth expectations. High valuations can lead to sharp corrections.",
-                                "Consumer Cyclical": "Highly sensitive to economic cycles. Performs well in expansions, poorly in recessions.",
-                                "Financial Services": "Sensitive to interest rates, credit quality, and regulatory changes.",
-                                "Energy": "Dependent on oil/gas prices, geopolitical events, and energy transition policies.",
-                                "Healthcare": "Regulatory risks, drug approval uncertainty, and political scrutiny on pricing.",
-                                "Real Estate": "Interest rate sensitive. Rising rates typically pressure REIT valuations.",
-                                "Communication Services": "Competitive pressure, content costs, and regulatory scrutiny.",
-                                "Consumer Defensive": "Generally stable but may lag in bull markets. Inflation can pressure margins.",
-                                "Utilities": "Interest rate sensitive but provides stable income. Limited growth potential.",
-                                "Industrials": "Economically sensitive. Trade policies and supply chain issues are key risks.",
-                                "Basic Materials": "Commodity price dependent. Cyclical and economically sensitive.",
-                            }
+                                    *{rf['implication']}*
+                                    """)
+                                elif rf["severity"] == "medium":
+                                    st.warning(f"""
+                                    **{rf['factor']}**
 
-                            if sector in sector_risks:
-                                risk_factors.append({
-                                    "factor": f"{sector} Sector Risk",
-                                    "severity": "info",
-                                    "explanation": sector_risks[sector],
-                                    "implication": "Consider sector concentration in your portfolio."
-                                })
+                                    {rf['explanation']}
 
-                            # Dividend analysis
-                            if div_yield > 0.05:  # 5%+
-                                risk_factors.append({
-                                    "factor": "Very High Dividend Yield",
-                                    "severity": "medium",
-                                    "explanation": f"Yield of {div_yield*100:.1f}% is unusually high.",
-                                    "implication": "Could indicate market expects dividend cut, or stock price has fallen significantly. Verify dividend sustainability."
-                                })
-                            elif div_yield > 0.02:
-                                positive_factors.append({
-                                    "factor": "Dividend Income",
-                                    "explanation": f"Pays a {div_yield*100:.1f}% dividend yield.",
-                                    "implication": "Provides income while you hold. Check dividend growth history."
-                                })
-                            elif div_yield == 0:
-                                risk_factors.append({
-                                    "factor": "No Dividend",
-                                    "severity": "info",
-                                    "explanation": "This stock doesn't pay dividends.",
-                                    "implication": "Returns come entirely from price appreciation. Common for growth stocks."
-                                })
+                                    *{rf['implication']}*
+                                    """)
+                                else:
+                                    st.info(f"""
+                                    **{rf['factor']}**
 
-                            # Market cap analysis
-                            if market_cap > 0:
-                                if market_cap < 2_000_000_000:  # < $2B
-                                    risk_factors.append({
-                                        "factor": "Small Cap",
-                                        "severity": "medium",
-                                        "explanation": f"Market cap of ${market_cap/1_000_000_000:.1f}B is considered small cap.",
-                                        "implication": "Higher volatility, less analyst coverage, potential liquidity issues. But also higher growth potential."
-                                    })
-                                elif market_cap > 200_000_000_000:  # > $200B
-                                    positive_factors.append({
-                                        "factor": "Mega Cap",
-                                        "explanation": f"Market cap of ${market_cap/1_000_000_000:.0f}B indicates a large, established company.",
-                                        "implication": "More stable, liquid, and well-covered by analysts."
-                                    })
+                                    {rf['explanation']}
 
-                            # Display risk factors
-                            if risk_factors:
-                                st.markdown("**⚠️ Risk Factors**")
-                                for rf in risk_factors:
-                                    if rf["severity"] == "high":
-                                        st.error(f"""
-                                        **{rf['factor']}**
-
-                                        {rf['explanation']}
-
-                                        *{rf['implication']}*
-                                        """)
-                                    elif rf["severity"] == "medium":
-                                        st.warning(f"""
-                                        **{rf['factor']}**
-
-                                        {rf['explanation']}
-
-                                        *{rf['implication']}*
-                                        """)
-                                    else:
-                                        st.info(f"""
-                                        **{rf['factor']}**
-
-                                        {rf['explanation']}
-
-                                        *{rf['implication']}*
-                                        """)
-
-                            # Display positive factors
-                            if positive_factors:
-                                st.markdown("**✅ Positive Factors**")
-                                for pf in positive_factors:
-                                    st.success(f"""
-                                    **{pf['factor']}**
-
-                                    {pf['explanation']}
-
-                                    *{pf['implication']}*
+                                    *{rf['implication']}*
                                     """)
 
-                            # Overall risk score
-                            risk_score = 50  # Base
-                            risk_score += (beta_val - 1) * 30  # Beta contribution
-                            risk_score += (range_52w - 40) * 0.3  # Range contribution
-                            if div_yield > 0.02:
-                                risk_score -= 10  # Dividend reduces risk score
-                            risk_score = max(0, min(100, risk_score))
+                        # Display positive factors
+                        if positive_factors:
+                            st.markdown("**✅ Positive Factors**")
+                            for pf in positive_factors:
+                                st.success(f"""
+                                **{pf['factor']}**
 
-                            st.markdown("---")
-                            st.markdown(f"**Overall Risk Score: {risk_score:.0f}/100**")
-                            if risk_score > 70:
-                                st.markdown("🔴 **High Risk** - Suitable for aggressive investors with long time horizons")
-                            elif risk_score > 40:
-                                st.markdown("🟡 **Moderate Risk** - Suitable for balanced portfolios")
-                            else:
-                                st.markdown("🟢 **Lower Risk** - Suitable for conservative investors")
+                                {pf['explanation']}
 
+                                *{pf['implication']}*
+                                """)
+
+                        # Overall risk score
+                        risk_score = 50  # Base
+                        risk_score += (beta_val - 1) * 30  # Beta contribution
+                        risk_score += (range_52w - 40) * 0.3  # Range contribution
+                        if div_yield > 0.02:
+                            risk_score -= 10  # Dividend reduces risk score
+                        risk_score = max(0, min(100, risk_score))
+
+                        st.markdown("---")
+                        st.markdown(f"**Overall Risk Score: {risk_score:.0f}/100**")
+                        if risk_score > 70:
+                            st.markdown("🔴 **High Risk** - Suitable for aggressive investors with long time horizons")
+                        elif risk_score > 40:
+                            st.markdown("🟡 **Moderate Risk** - Suitable for balanced portfolios")
                         else:
-                            st.error(f"Could not find {stock_search}")
-                    except Exception as e:
-                        st.error(f"Error fetching data: {e}")
+                            st.markdown("🟢 **Lower Risk** - Suitable for conservative investors")
+
+                    else:
+                        st.error(f"Could not find {stock_search}")
+                except Exception as e:
+                    loading_placeholder.empty()
+                    st.error(f"Error fetching data: {e}")
 
         # ══════════════════════════════════════════════
         # REBALANCING TAB
