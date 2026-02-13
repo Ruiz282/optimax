@@ -729,6 +729,76 @@ with tab_dashboard:
         with dash_tab1:
             st.markdown("#### Portfolio Performance")
 
+            # ── Sparkline Cards ──
+            st.markdown("**Holdings Overview (7-Day Trend)**")
+
+            # Cache sparkline data in session
+            if "sparkline_cache" not in st.session_state:
+                st.session_state.sparkline_cache = {}
+
+            # Load sparklines for holdings not in cache
+            for h in st.session_state.holdings:
+                if h.symbol not in st.session_state.sparkline_cache:
+                    prices = get_sparkline_data(h.symbol, days=7)
+                    st.session_state.sparkline_cache[h.symbol] = prices
+
+            # Display cards in grid
+            cols_per_row = 4
+            sorted_holdings = sorted(st.session_state.holdings, key=lambda x: x.market_value, reverse=True)
+
+            for i in range(0, min(len(sorted_holdings), 8), cols_per_row):  # Show top 8
+                cols = st.columns(cols_per_row)
+                for j, col in enumerate(cols):
+                    if i + j < len(sorted_holdings) and i + j < 8:
+                        h = sorted_holdings[i + j]
+
+                        # Determine card color based on P&L
+                        if h.unrealized_pnl_pct > 10:
+                            glow_color = "0, 200, 83"
+                            border_color = "#00C853"
+                        elif h.unrealized_pnl_pct > 0:
+                            glow_color = "76, 175, 80"
+                            border_color = "#4CAF50"
+                        elif h.unrealized_pnl_pct > -10:
+                            glow_color = "255, 82, 82"
+                            border_color = "#FF5252"
+                        else:
+                            glow_color = "211, 47, 47"
+                            border_color = "#D32F2F"
+
+                        # Get sparkline
+                        prices = st.session_state.sparkline_cache.get(h.symbol, [])
+                        sparkline_svg = create_sparkline_svg(prices, width=60, height=20) if prices else ""
+
+                        # Create compact card
+                        pnl_sign = "+" if h.unrealized_pnl >= 0 else ""
+                        card_html = f"""
+                        <div style='
+                            background: linear-gradient(145deg, #2E2E2E, #252525);
+                            border-radius: 10px;
+                            padding: 12px;
+                            margin: 4px 0;
+                            border-left: 3px solid {border_color};
+                            box-shadow: 0 0 12px rgba({glow_color}, 0.25);
+                        '>
+                            <div style='display: flex; justify-content: space-between; align-items: center;'>
+                                <span style='font-size: 1.1em; font-weight: bold; color: white;'>{h.symbol}</span>
+                                {sparkline_svg}
+                            </div>
+                            <div style='margin-top: 6px; display: flex; justify-content: space-between; align-items: baseline;'>
+                                <span style='color: white; font-size: 0.95em;'>${h.market_value:,.0f}</span>
+                                <span style='color: {border_color}; font-weight: bold;'>{pnl_sign}{h.unrealized_pnl_pct:.1f}%</span>
+                            </div>
+                        </div>
+                        """
+                        with col:
+                            st.markdown(card_html, unsafe_allow_html=True)
+
+            if len(st.session_state.holdings) > 8:
+                st.caption(f"Showing top 8 of {len(st.session_state.holdings)} holdings by value")
+
+            st.markdown("---")
+
             # Top/Bottom Performers
             perf_col1, perf_col2 = st.columns(2)
 
@@ -850,6 +920,172 @@ with tab_dashboard:
                 st.metric("VaR (95%)", f"${var_95:,.0f}",
                          help="Maximum expected loss in a day with 95% confidence")
 
+            # ── Detailed Risk Explanations ──
+            st.markdown("---")
+            st.markdown("#### Understanding Your Risk Metrics")
+
+            with st.expander("📊 What These Numbers Mean", expanded=True):
+                explanation_cols = st.columns(2)
+
+                with explanation_cols[0]:
+                    # Beta explanation
+                    st.markdown("**Portfolio Beta**")
+                    if portfolio_beta > 1.5:
+                        st.error(f"""
+                        🔴 **Very High Risk (Beta: {portfolio_beta:.2f})**
+
+                        Your portfolio is **{((portfolio_beta - 1) * 100):.0f}% more volatile** than the market.
+
+                        **What this means:**
+                        - If S&P 500 drops 10%, expect ~{portfolio_beta * 10:.0f}% loss
+                        - If S&P 500 rises 10%, expect ~{portfolio_beta * 10:.0f}% gain
+                        - High potential reward, but high potential pain
+
+                        **Why:** Heavy in growth/tech stocks, speculative positions, or leveraged ETFs
+                        """)
+                    elif portfolio_beta > 1.2:
+                        st.warning(f"""
+                        🟠 **Elevated Risk (Beta: {portfolio_beta:.2f})**
+
+                        Your portfolio is **{((portfolio_beta - 1) * 100):.0f}% more volatile** than the market.
+
+                        **What this means:**
+                        - Amplified gains in bull markets
+                        - Amplified losses in bear markets
+                        - Suitable if you have long time horizon
+
+                        **Why:** Growth-tilted portfolio, tech-heavy, or cyclical stocks
+                        """)
+                    elif portfolio_beta > 0.8:
+                        st.info(f"""
+                        🟢 **Moderate Risk (Beta: {portfolio_beta:.2f})**
+
+                        Your portfolio moves **roughly in line** with the market.
+
+                        **What this means:**
+                        - Balanced risk/reward profile
+                        - Good diversification across sectors
+                        - Suitable for most investors
+
+                        **Why:** Mix of growth and defensive positions
+                        """)
+                    else:
+                        st.success(f"""
+                        🛡️ **Defensive Portfolio (Beta: {portfolio_beta:.2f})**
+
+                        Your portfolio is **{((1 - portfolio_beta) * 100):.0f}% less volatile** than the market.
+
+                        **What this means:**
+                        - More stable during market drops
+                        - May lag during strong bull markets
+                        - Capital preservation focus
+
+                        **Why:** Utilities, consumer staples, bonds, or dividend stocks
+                        """)
+
+                with explanation_cols[1]:
+                    # Sharpe explanation
+                    st.markdown("**Sharpe Ratio**")
+                    if sharpe > 2:
+                        st.success(f"""
+                        🏆 **Excellent Risk-Adjusted Returns (Sharpe: {sharpe:.2f})**
+
+                        You're getting **exceptional returns** for the risk taken.
+
+                        **Interpretation:**
+                        - Top-tier performance
+                        - Efficient portfolio construction
+                        - Every unit of risk is well-rewarded
+                        """)
+                    elif sharpe > 1:
+                        st.info(f"""
+                        ✅ **Good Risk-Adjusted Returns (Sharpe: {sharpe:.2f})**
+
+                        Returns are **adequately compensating** for risk.
+
+                        **Interpretation:**
+                        - Acceptable for most strategies
+                        - Returns exceed risk-free rate meaningfully
+                        - Room for optimization but solid
+                        """)
+                    elif sharpe > 0:
+                        st.warning(f"""
+                        ⚠️ **Marginal Returns (Sharpe: {sharpe:.2f})**
+
+                        Returns are **barely beating** risk-free investments.
+
+                        **Interpretation:**
+                        - Consider if the risk is worth it
+                        - Treasury bills might offer similar returns with no risk
+                        - Review underperforming positions
+                        """)
+                    else:
+                        st.error(f"""
+                        🔴 **Negative Risk-Adjusted Returns (Sharpe: {sharpe:.2f})**
+
+                        You'd be better off in **Treasury bills**.
+
+                        **Interpretation:**
+                        - Taking on risk without adequate reward
+                        - Losses or returns below risk-free rate
+                        - Urgent need to review strategy
+                        """)
+
+            # VaR and Max Drawdown explanations
+            with st.expander("📉 Downside Risk Analysis"):
+                dd_cols = st.columns(2)
+
+                with dd_cols[0]:
+                    st.markdown("**Value at Risk (VaR)**")
+                    st.markdown(f"""
+                    Your VaR (95%) is **${var_95:,.0f}**
+
+                    **What this means:**
+                    - On 95% of trading days, you won't lose more than ${var_95:,.0f}
+                    - But on 5% of days (about 12-13 days/year), losses could exceed this
+                    - This is a "normal conditions" estimate
+
+                    **In perspective:**
+                    - As % of portfolio: **{(var_95/total_invested*100) if total_invested > 0 else 0:.1f}%**
+                    - Monthly worst case (approx): **${var_95 * 4.5:,.0f}**
+                    """)
+
+                with dd_cols[1]:
+                    st.markdown("**Maximum Drawdown**")
+                    if max_dd < -30:
+                        st.error(f"""
+                        🔴 **Severe Drawdown: {max_dd:.1f}%**
+
+                        One or more positions has lost over 30%.
+
+                        **Considerations:**
+                        - Is the thesis still intact?
+                        - Tax-loss harvesting opportunity?
+                        - Average down or cut losses?
+                        """)
+                    elif max_dd < -15:
+                        st.warning(f"""
+                        🟠 **Significant Drawdown: {max_dd:.1f}%**
+
+                        Notable loss in some positions.
+
+                        **Considerations:**
+                        - Review the losing positions
+                        - Check if sector-wide or company-specific
+                        - Rebalancing may help
+                        """)
+                    else:
+                        st.success(f"""
+                        🟢 **Contained Drawdown: {max_dd:.1f}%**
+
+                        Losses are within normal range.
+
+                        **Good signs:**
+                        - Diversification is working
+                        - No catastrophic single-stock risk
+                        - Portfolio is resilient
+                        """)
+
             st.markdown("---")
 
             # Concentration Risk
@@ -940,14 +1176,200 @@ with tab_dashboard:
                             # Additional info
                             st.markdown(f"**{stock_data.get('name', stock_search)}** | Sector: {stock_data.get('sector', 'N/A')}")
 
-                            # Risk assessment
+                            st.markdown("---")
+
+                            # Comprehensive Risk Assessment
                             beta_val = stock_data.get('beta', 1.0) or 1.0
+                            high_52 = stock_data.get('fifty_two_week_high', 0) or 0
+                            low_52 = stock_data.get('fifty_two_week_low', 0) or 0
+                            current_price = stock_data.get('current_price', 0)
+                            div_yield = stock_data.get('dividend_yield', 0) or 0
+                            sector = stock_data.get('sector', 'Unknown')
+                            market_cap = stock_data.get('market_cap', 0) or 0
+
+                            # Calculate additional metrics
+                            range_52w = ((high_52 - low_52) / low_52 * 100) if low_52 > 0 else 0
+                            distance_from_high = ((high_52 - current_price) / high_52 * 100) if high_52 > 0 else 0
+                            distance_from_low = ((current_price - low_52) / low_52 * 100) if low_52 > 0 else 0
+
+                            st.markdown("#### Detailed Risk Analysis")
+
+                            # Risk factors with explanations
+                            risk_factors = []
+                            positive_factors = []
+
+                            # Beta analysis
                             if beta_val > 1.5:
-                                st.warning(f"⚠️ High volatility stock (Beta: {beta_val:.2f}). Expect larger swings than the market.")
-                            elif beta_val < 0.7:
-                                st.success(f"🛡️ Defensive stock (Beta: {beta_val:.2f}). Lower volatility than the market.")
+                                risk_factors.append({
+                                    "factor": "High Beta",
+                                    "severity": "high",
+                                    "explanation": f"Beta of {beta_val:.2f} means this stock is {((beta_val-1)*100):.0f}% more volatile than the market. When the S&P 500 moves 1%, this stock typically moves {beta_val:.1f}%.",
+                                    "implication": "Expect significant swings during market volatility. Not suitable for conservative investors."
+                                })
+                            elif beta_val > 1.2:
+                                risk_factors.append({
+                                    "factor": "Elevated Beta",
+                                    "severity": "medium",
+                                    "explanation": f"Beta of {beta_val:.2f} indicates above-average market sensitivity.",
+                                    "implication": "Will amplify both gains and losses relative to the market."
+                                })
+                            elif beta_val < 0.6:
+                                positive_factors.append({
+                                    "factor": "Low Beta (Defensive)",
+                                    "explanation": f"Beta of {beta_val:.2f} means this stock is {((1-beta_val)*100):.0f}% less volatile than the market.",
+                                    "implication": "Good for capital preservation, but may lag in bull markets."
+                                })
+
+                            # 52-week range analysis
+                            if range_52w > 80:
+                                risk_factors.append({
+                                    "factor": "Extreme Price Swings",
+                                    "severity": "high",
+                                    "explanation": f"The stock has swung {range_52w:.0f}% between its 52-week high (${high_52:.2f}) and low (${low_52:.2f}).",
+                                    "implication": "Highly volatile - could experience dramatic moves in either direction."
+                                })
+                            elif range_52w > 50:
+                                risk_factors.append({
+                                    "factor": "Wide Trading Range",
+                                    "severity": "medium",
+                                    "explanation": f"52-week range of {range_52w:.0f}% indicates significant price movement.",
+                                    "implication": "Moderate volatility - typical for growth stocks."
+                                })
+
+                            # Distance from 52-week high/low
+                            if distance_from_high > 30:
+                                risk_factors.append({
+                                    "factor": "Far Below 52W High",
+                                    "severity": "medium",
+                                    "explanation": f"Currently {distance_from_high:.0f}% below its 52-week high of ${high_52:.2f}.",
+                                    "implication": "Could be undervalued or in a downtrend. Research why it's down before buying."
+                                })
+                            elif distance_from_high < 5:
+                                positive_factors.append({
+                                    "factor": "Near 52W High",
+                                    "explanation": f"Trading within 5% of its 52-week high - showing strength.",
+                                    "implication": "Momentum is positive, but may face resistance at the high."
+                                })
+
+                            # Sector-specific risks
+                            sector_risks = {
+                                "Technology": "Tech stocks are sensitive to interest rates and growth expectations. High valuations can lead to sharp corrections.",
+                                "Consumer Cyclical": "Highly sensitive to economic cycles. Performs well in expansions, poorly in recessions.",
+                                "Financial Services": "Sensitive to interest rates, credit quality, and regulatory changes.",
+                                "Energy": "Dependent on oil/gas prices, geopolitical events, and energy transition policies.",
+                                "Healthcare": "Regulatory risks, drug approval uncertainty, and political scrutiny on pricing.",
+                                "Real Estate": "Interest rate sensitive. Rising rates typically pressure REIT valuations.",
+                                "Communication Services": "Competitive pressure, content costs, and regulatory scrutiny.",
+                                "Consumer Defensive": "Generally stable but may lag in bull markets. Inflation can pressure margins.",
+                                "Utilities": "Interest rate sensitive but provides stable income. Limited growth potential.",
+                                "Industrials": "Economically sensitive. Trade policies and supply chain issues are key risks.",
+                                "Basic Materials": "Commodity price dependent. Cyclical and economically sensitive.",
+                            }
+
+                            if sector in sector_risks:
+                                risk_factors.append({
+                                    "factor": f"{sector} Sector Risk",
+                                    "severity": "info",
+                                    "explanation": sector_risks[sector],
+                                    "implication": "Consider sector concentration in your portfolio."
+                                })
+
+                            # Dividend analysis
+                            if div_yield > 0.05:  # 5%+
+                                risk_factors.append({
+                                    "factor": "Very High Dividend Yield",
+                                    "severity": "medium",
+                                    "explanation": f"Yield of {div_yield*100:.1f}% is unusually high.",
+                                    "implication": "Could indicate market expects dividend cut, or stock price has fallen significantly. Verify dividend sustainability."
+                                })
+                            elif div_yield > 0.02:
+                                positive_factors.append({
+                                    "factor": "Dividend Income",
+                                    "explanation": f"Pays a {div_yield*100:.1f}% dividend yield.",
+                                    "implication": "Provides income while you hold. Check dividend growth history."
+                                })
+                            elif div_yield == 0:
+                                risk_factors.append({
+                                    "factor": "No Dividend",
+                                    "severity": "info",
+                                    "explanation": "This stock doesn't pay dividends.",
+                                    "implication": "Returns come entirely from price appreciation. Common for growth stocks."
+                                })
+
+                            # Market cap analysis
+                            if market_cap > 0:
+                                if market_cap < 2_000_000_000:  # < $2B
+                                    risk_factors.append({
+                                        "factor": "Small Cap",
+                                        "severity": "medium",
+                                        "explanation": f"Market cap of ${market_cap/1_000_000_000:.1f}B is considered small cap.",
+                                        "implication": "Higher volatility, less analyst coverage, potential liquidity issues. But also higher growth potential."
+                                    })
+                                elif market_cap > 200_000_000_000:  # > $200B
+                                    positive_factors.append({
+                                        "factor": "Mega Cap",
+                                        "explanation": f"Market cap of ${market_cap/1_000_000_000:.0f}B indicates a large, established company.",
+                                        "implication": "More stable, liquid, and well-covered by analysts."
+                                    })
+
+                            # Display risk factors
+                            if risk_factors:
+                                st.markdown("**⚠️ Risk Factors**")
+                                for rf in risk_factors:
+                                    if rf["severity"] == "high":
+                                        st.error(f"""
+                                        **{rf['factor']}**
+
+                                        {rf['explanation']}
+
+                                        *{rf['implication']}*
+                                        """)
+                                    elif rf["severity"] == "medium":
+                                        st.warning(f"""
+                                        **{rf['factor']}**
+
+                                        {rf['explanation']}
+
+                                        *{rf['implication']}*
+                                        """)
+                                    else:
+                                        st.info(f"""
+                                        **{rf['factor']}**
+
+                                        {rf['explanation']}
+
+                                        *{rf['implication']}*
+                                        """)
+
+                            # Display positive factors
+                            if positive_factors:
+                                st.markdown("**✅ Positive Factors**")
+                                for pf in positive_factors:
+                                    st.success(f"""
+                                    **{pf['factor']}**
+
+                                    {pf['explanation']}
+
+                                    *{pf['implication']}*
+                                    """)
+
+                            # Overall risk score
+                            risk_score = 50  # Base
+                            risk_score += (beta_val - 1) * 30  # Beta contribution
+                            risk_score += (range_52w - 40) * 0.3  # Range contribution
+                            if div_yield > 0.02:
+                                risk_score -= 10  # Dividend reduces risk score
+                            risk_score = max(0, min(100, risk_score))
+
+                            st.markdown("---")
+                            st.markdown(f"**Overall Risk Score: {risk_score:.0f}/100**")
+                            if risk_score > 70:
+                                st.markdown("🔴 **High Risk** - Suitable for aggressive investors with long time horizons")
+                            elif risk_score > 40:
+                                st.markdown("🟡 **Moderate Risk** - Suitable for balanced portfolios")
                             else:
-                                st.info(f"📊 Moderate risk (Beta: {beta_val:.2f}). Moves roughly with the market.")
+                                st.markdown("🟢 **Lower Risk** - Suitable for conservative investors")
+
                         else:
                             st.error(f"Could not find {stock_search}")
                     except Exception as e:
@@ -1762,136 +2184,46 @@ with tab_portfolio:
                     st.session_state.holdings = refreshed
                     st.rerun()
 
-        # View toggle
-        view_mode = st.radio("View", ["Cards", "Table"], horizontal=True, key="holdings_view")
+        # ── Holdings Table ──
+        # Build holdings dataframe
+        holdings_data = []
+        for h in st.session_state.holdings:
+            holdings_data.append({
+                "Symbol": h.symbol,
+                "Name": h.name[:25] + "..." if len(h.name) > 25 else h.name,
+                "Type": h.asset_type,
+                "Shares": h.shares,
+                "Price": h.current_price,
+                "Avg Cost": h.avg_cost,
+                "Purchased": h.purchase_date.strftime("%Y-%m-%d") if h.purchase_date else "-",
+                "Value": h.market_value,
+                "P&L": h.unrealized_pnl,
+                "P&L %": h.unrealized_pnl_pct,
+                "Div Yield": h.dividend_yield * 100,
+                "Income": h.annual_income,
+                "Beta": h.beta,
+            })
 
-        if view_mode == "Cards":
-            # ── Sparkline Cards with Glow Effects ──
-            # Cache sparkline data in session
-            if "sparkline_cache" not in st.session_state:
-                st.session_state.sparkline_cache = {}
+        holdings_df = pd.DataFrame(holdings_data)
 
-            # Load sparklines for holdings not in cache
-            for h in st.session_state.holdings:
-                if h.symbol not in st.session_state.sparkline_cache:
-                    prices = get_sparkline_data(h.symbol, days=7)
-                    st.session_state.sparkline_cache[h.symbol] = prices
+        # Format for display
+        display_df = holdings_df.copy()
+        display_df["Price"] = display_df["Price"].apply(lambda x: f"${x:,.2f}")
+        display_df["Avg Cost"] = display_df["Avg Cost"].apply(lambda x: f"${x:,.2f}")
+        display_df["Value"] = display_df["Value"].apply(lambda x: f"${x:,.2f}")
+        display_df["P&L"] = display_df["P&L"].apply(lambda x: f"${x:+,.2f}")
+        display_df["P&L %"] = display_df["P&L %"].apply(lambda x: f"{x:+.2f}%")
+        display_df["Div Yield"] = display_df["Div Yield"].apply(lambda x: f"{x:.2f}%")
+        display_df["Income"] = display_df["Income"].apply(lambda x: f"${x:,.2f}")
+        display_df["Beta"] = display_df["Beta"].apply(lambda x: f"{x:.2f}" if x else "-")
+        display_df["Shares"] = display_df["Shares"].apply(lambda x: f"{x:,.2f}")
 
-            # Display cards in grid
-            cols_per_row = 3
-            sorted_holdings = sorted(st.session_state.holdings, key=lambda x: x.market_value, reverse=True)
-
-            for i in range(0, len(sorted_holdings), cols_per_row):
-                cols = st.columns(cols_per_row)
-                for j, col in enumerate(cols):
-                    if i + j < len(sorted_holdings):
-                        h = sorted_holdings[i + j]
-
-                        # Determine card color based on P&L
-                        if h.unrealized_pnl_pct > 10:
-                            glow_color = "0, 200, 83"  # Strong green
-                            border_color = "#00C853"
-                        elif h.unrealized_pnl_pct > 0:
-                            glow_color = "76, 175, 80"  # Light green
-                            border_color = "#4CAF50"
-                        elif h.unrealized_pnl_pct > -10:
-                            glow_color = "255, 82, 82"  # Light red
-                            border_color = "#FF5252"
-                        else:
-                            glow_color = "211, 47, 47"  # Strong red
-                            border_color = "#D32F2F"
-
-                        # Get sparkline
-                        prices = st.session_state.sparkline_cache.get(h.symbol, [])
-                        sparkline_svg = create_sparkline_svg(prices) if prices else ""
-
-                        # Create card with glow effect
-                        pnl_sign = "+" if h.unrealized_pnl >= 0 else ""
-                        card_html = f"""
-                        <div style='
-                            background: linear-gradient(145deg, #2E2E2E, #252525);
-                            border-radius: 12px;
-                            padding: 16px;
-                            margin: 8px 0;
-                            border-left: 4px solid {border_color};
-                            box-shadow: 0 0 15px rgba({glow_color}, 0.3);
-                            transition: all 0.3s ease;
-                        '>
-                            <div style='display: flex; justify-content: space-between; align-items: start;'>
-                                <div>
-                                    <span style='font-size: 1.3em; font-weight: bold; color: white;'>{h.symbol}</span>
-                                    <br>
-                                    <span style='color: #888; font-size: 0.85em;'>{h.name[:20]}{"..." if len(h.name) > 20 else ""}</span>
-                                </div>
-                                <div style='text-align: right;'>
-                                    {sparkline_svg}
-                                </div>
-                            </div>
-                            <div style='margin-top: 12px; display: flex; justify-content: space-between;'>
-                                <div>
-                                    <span style='color: #888; font-size: 0.8em;'>Value</span><br>
-                                    <span style='color: white; font-size: 1.1em; font-weight: bold;'>${h.market_value:,.0f}</span>
-                                </div>
-                                <div style='text-align: center;'>
-                                    <span style='color: #888; font-size: 0.8em;'>Shares</span><br>
-                                    <span style='color: white;'>{h.shares:,.2f}</span>
-                                </div>
-                                <div style='text-align: right;'>
-                                    <span style='color: #888; font-size: 0.8em;'>P&L</span><br>
-                                    <span style='color: {border_color}; font-size: 1.1em; font-weight: bold;'>{pnl_sign}{h.unrealized_pnl_pct:.1f}%</span>
-                                </div>
-                            </div>
-                            <div style='margin-top: 8px; padding-top: 8px; border-top: 1px solid #444;'>
-                                <span style='color: #888; font-size: 0.75em;'>
-                                    ${h.current_price:,.2f} • Avg: ${h.avg_cost:,.2f} • {h.unrealized_pnl:+,.0f}
-                                </span>
-                            </div>
-                        </div>
-                        """
-                        with col:
-                            st.markdown(card_html, unsafe_allow_html=True)
-
-        else:
-            # ── Traditional Table View ──
-            # Build holdings dataframe
-            holdings_data = []
-            for h in st.session_state.holdings:
-                holdings_data.append({
-                    "Symbol": h.symbol,
-                    "Name": h.name[:25] + "..." if len(h.name) > 25 else h.name,
-                    "Type": h.asset_type,
-                    "Shares": h.shares,
-                    "Price": h.current_price,
-                    "Avg Cost": h.avg_cost,
-                    "Purchased": h.purchase_date.strftime("%Y-%m-%d") if h.purchase_date else "-",
-                    "Value": h.market_value,
-                    "P&L": h.unrealized_pnl,
-                    "P&L %": h.unrealized_pnl_pct,
-                    "Div Yield": h.dividend_yield * 100,
-                    "Income": h.annual_income,
-                    "Beta": h.beta,
-                })
-
-            holdings_df = pd.DataFrame(holdings_data)
-
-            # Format for display
-            display_df = holdings_df.copy()
-            display_df["Price"] = display_df["Price"].apply(lambda x: f"${x:,.2f}")
-            display_df["Avg Cost"] = display_df["Avg Cost"].apply(lambda x: f"${x:,.2f}")
-            display_df["Value"] = display_df["Value"].apply(lambda x: f"${x:,.2f}")
-            display_df["P&L"] = display_df["P&L"].apply(lambda x: f"${x:+,.2f}")
-            display_df["P&L %"] = display_df["P&L %"].apply(lambda x: f"{x:+.2f}%")
-            display_df["Div Yield"] = display_df["Div Yield"].apply(lambda x: f"{x:.2f}%")
-            display_df["Income"] = display_df["Income"].apply(lambda x: f"${x:,.2f}")
-            display_df["Beta"] = display_df["Beta"].apply(lambda x: f"{x:.2f}" if x else "-")
-            display_df["Shares"] = display_df["Shares"].apply(lambda x: f"{x:,.2f}")
-
-            st.dataframe(
-                display_df,
-                use_container_width=True,
-                hide_index=True,
-                height=min(400, 35 * len(holdings_df) + 38),
-            )
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            hide_index=True,
+            height=min(400, 35 * len(holdings_df) + 38),
+        )
 
         # ── Edit Holdings ──
         with st.expander("Edit Holdings"):
