@@ -694,9 +694,10 @@ for exp in expirations:
 # Main Tabs
 # ─────────────────────────────────────────────
 
-tab_dashboard, tab_portfolio, tab_cash, tab_calendar, tab_options, tab_entropy = st.tabs([
+tab_dashboard, tab_portfolio, tab_valuation, tab_cash, tab_calendar, tab_options, tab_entropy = st.tabs([
     "📊 Dashboard",
     "💼 Portfolio Manager",
+    "📋 Valuation & Analysis",
     "💵 Cash & Money Market",
     "📅 Calendar & News",
     "📈 Options Trading",
@@ -4428,6 +4429,564 @@ with tab_options:
                     f"actual movement. Edge in buying premium.")
             else:
                 st.info(f"**IV/RV Ratio: {premium_ratio:.2f}x** — IV and RV roughly in line.")
+
+
+# ═════════════════════════════════════════════
+# TAB: Valuation & Analysis
+# ═════════════════════════════════════════════
+
+with tab_valuation:
+    st.subheader("Stock Valuation & Fundamental Analysis")
+    st.caption("DCF, P/E, EV/EBITDA valuations with comprehensive fundamental metrics")
+
+    # Stock input
+    val_col1, val_col2 = st.columns([1, 3])
+    with val_col1:
+        val_symbol = st.text_input("Enter Ticker", value="AAPL", key="val_ticker").upper().strip()
+    with val_col2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        run_valuation = st.button("Run Valuation Analysis", key="run_val", type="primary")
+
+    if val_symbol and run_valuation:
+        # Show loading animation
+        loading_placeholder = st.empty()
+        loading_placeholder.markdown(show_dollar_spinner(f"Analyzing {val_symbol}..."), unsafe_allow_html=True)
+
+        try:
+            import yfinance as yf
+            ticker = yf.Ticker(val_symbol)
+            info = ticker.info
+            financials = ticker.financials
+            balance_sheet = ticker.balance_sheet
+            cash_flow = ticker.cashflow
+
+            loading_placeholder.empty()
+
+            if not info.get('currentPrice'):
+                st.error(f"Could not find data for {val_symbol}")
+            else:
+                # Extract key data
+                current_price = info.get('currentPrice', 0)
+                market_cap = info.get('marketCap', 0)
+                enterprise_value = info.get('enterpriseValue', 0)
+                shares_outstanding = info.get('sharesOutstanding', 0)
+
+                # Valuation metrics
+                pe_ratio = info.get('trailingPE', 0) or 0
+                forward_pe = info.get('forwardPE', 0) or 0
+                peg_ratio = info.get('pegRatio', 0) or 0
+                pb_ratio = info.get('priceToBook', 0) or 0
+                ps_ratio = info.get('priceToSalesTrailing12Months', 0) or 0
+                ev_ebitda = info.get('enterpriseToEbitda', 0) or 0
+                ev_revenue = info.get('enterpriseToRevenue', 0) or 0
+
+                # Profitability
+                profit_margin = info.get('profitMargins', 0) or 0
+                operating_margin = info.get('operatingMargins', 0) or 0
+                gross_margin = info.get('grossMargins', 0) or 0
+                roe = info.get('returnOnEquity', 0) or 0
+                roa = info.get('returnOnAssets', 0) or 0
+
+                # Growth
+                revenue_growth = info.get('revenueGrowth', 0) or 0
+                earnings_growth = info.get('earningsGrowth', 0) or 0
+
+                # Financial health
+                current_ratio = info.get('currentRatio', 0) or 0
+                debt_to_equity = info.get('debtToEquity', 0) or 0
+                total_debt = info.get('totalDebt', 0) or 0
+                total_cash = info.get('totalCash', 0) or 0
+                free_cash_flow = info.get('freeCashflow', 0) or 0
+
+                # EPS data
+                trailing_eps = info.get('trailingEps', 0) or 0
+                forward_eps = info.get('forwardEps', 0) or 0
+
+                # EBITDA
+                ebitda = info.get('ebitda', 0) or 0
+                total_revenue = info.get('totalRevenue', 0) or 0
+
+                # Company info
+                company_name = info.get('shortName', val_symbol)
+                sector = info.get('sector', 'N/A')
+                industry = info.get('industry', 'N/A')
+
+                # ═══════════════════════════════════════════
+                # HEADER - Company Overview
+                # ═══════════════════════════════════════════
+                st.markdown(f"## {company_name} ({val_symbol})")
+                st.markdown(f"**Sector:** {sector} | **Industry:** {industry}")
+
+                overview_cols = st.columns(5)
+                with overview_cols[0]:
+                    st.metric("Current Price", f"${current_price:,.2f}")
+                with overview_cols[1]:
+                    st.metric("Market Cap", f"${market_cap/1e9:,.1f}B" if market_cap > 1e9 else f"${market_cap/1e6:,.0f}M")
+                with overview_cols[2]:
+                    st.metric("P/E Ratio", f"{pe_ratio:.1f}" if pe_ratio else "N/A")
+                with overview_cols[3]:
+                    st.metric("EV/EBITDA", f"{ev_ebitda:.1f}" if ev_ebitda else "N/A")
+                with overview_cols[4]:
+                    div_yield = info.get('trailingAnnualDividendYield', 0) or 0
+                    st.metric("Div Yield", f"{div_yield*100:.2f}%")
+
+                st.markdown("---")
+
+                # ═══════════════════════════════════════════
+                # VALUATION METHODS
+                # ═══════════════════════════════════════════
+                val_tab1, val_tab2, val_tab3, val_tab4 = st.tabs([
+                    "📊 DCF Valuation",
+                    "📈 Relative Valuation",
+                    "📉 Fundamental Analysis",
+                    "💰 Financial Health"
+                ])
+
+                # ── DCF VALUATION ──
+                with val_tab1:
+                    st.markdown("### Discounted Cash Flow (DCF) Valuation")
+                    st.caption("Estimate intrinsic value based on projected free cash flows")
+
+                    if free_cash_flow and free_cash_flow > 0:
+                        dcf_col1, dcf_col2 = st.columns(2)
+
+                        with dcf_col1:
+                            st.markdown("**Assumptions**")
+                            fcf_growth_rate = st.slider("FCF Growth Rate (Years 1-5)", 0.0, 30.0, 10.0, 1.0, key="fcf_growth") / 100
+                            terminal_growth = st.slider("Terminal Growth Rate", 0.0, 5.0, 2.5, 0.5, key="term_growth") / 100
+                            discount_rate = st.slider("Discount Rate (WACC)", 5.0, 15.0, 10.0, 0.5, key="wacc") / 100
+                            projection_years = st.selectbox("Projection Years", [5, 7, 10], index=0, key="proj_years")
+
+                        with dcf_col2:
+                            st.markdown("**Current Financials**")
+                            st.markdown(f"- Free Cash Flow: **${free_cash_flow/1e9:.2f}B**")
+                            st.markdown(f"- Shares Outstanding: **{shares_outstanding/1e9:.2f}B**")
+                            st.markdown(f"- Total Debt: **${total_debt/1e9:.2f}B**")
+                            st.markdown(f"- Total Cash: **${total_cash/1e9:.2f}B**")
+
+                        # Calculate DCF
+                        projected_fcf = []
+                        fcf = free_cash_flow
+                        for year in range(1, projection_years + 1):
+                            fcf = fcf * (1 + fcf_growth_rate)
+                            projected_fcf.append(fcf)
+
+                        # Present value of projected FCF
+                        pv_fcf = []
+                        for i, fcf_val in enumerate(projected_fcf):
+                            pv = fcf_val / ((1 + discount_rate) ** (i + 1))
+                            pv_fcf.append(pv)
+
+                        # Terminal value
+                        terminal_fcf = projected_fcf[-1] * (1 + terminal_growth)
+                        terminal_value = terminal_fcf / (discount_rate - terminal_growth)
+                        pv_terminal = terminal_value / ((1 + discount_rate) ** projection_years)
+
+                        # Enterprise value
+                        dcf_enterprise_value = sum(pv_fcf) + pv_terminal
+
+                        # Equity value
+                        net_debt = total_debt - total_cash
+                        equity_value = dcf_enterprise_value - net_debt
+
+                        # Per share value
+                        intrinsic_value = equity_value / shares_outstanding if shares_outstanding > 0 else 0
+
+                        # Margin of safety
+                        upside = ((intrinsic_value - current_price) / current_price) * 100 if current_price > 0 else 0
+
+                        st.markdown("---")
+                        st.markdown("### DCF Results")
+
+                        # Show projected FCF table
+                        fcf_df = pd.DataFrame({
+                            "Year": [f"Year {i+1}" for i in range(projection_years)] + ["Terminal"],
+                            "FCF ($B)": [f/1e9 for f in projected_fcf] + [terminal_fcf/1e9],
+                            "PV ($B)": [f/1e9 for f in pv_fcf] + [pv_terminal/1e9]
+                        })
+                        st.dataframe(fcf_df.style.format({"FCF ($B)": "${:.2f}", "PV ($B)": "${:.2f}"}), hide_index=True)
+
+                        result_cols = st.columns(4)
+                        with result_cols[0]:
+                            st.metric("Enterprise Value", f"${dcf_enterprise_value/1e9:.1f}B")
+                        with result_cols[1]:
+                            st.metric("Equity Value", f"${equity_value/1e9:.1f}B")
+                        with result_cols[2]:
+                            st.metric("Intrinsic Value/Share", f"${intrinsic_value:.2f}")
+                        with result_cols[3]:
+                            upside_color = "normal" if upside > 0 else "inverse"
+                            st.metric("Upside/Downside", f"{upside:+.1f}%", delta_color=upside_color)
+
+                        # Valuation verdict
+                        if upside > 20:
+                            st.success(f"🟢 **UNDERVALUED** — The stock appears undervalued by {upside:.0f}% based on DCF analysis. Current price ${current_price:.2f} vs intrinsic value ${intrinsic_value:.2f}.")
+                        elif upside > 0:
+                            st.info(f"🟡 **FAIRLY VALUED** — The stock is slightly undervalued by {upside:.0f}%. Limited upside potential.")
+                        elif upside > -20:
+                            st.warning(f"🟠 **SLIGHTLY OVERVALUED** — The stock appears {abs(upside):.0f}% overvalued. Consider waiting for a better entry point.")
+                        else:
+                            st.error(f"🔴 **OVERVALUED** — The stock appears significantly overvalued by {abs(upside):.0f}%. DCF suggests intrinsic value of ${intrinsic_value:.2f}.")
+
+                        # Sensitivity analysis
+                        st.markdown("---")
+                        st.markdown("### Sensitivity Analysis")
+                        st.caption("How intrinsic value changes with different assumptions")
+
+                        growth_rates = [fcf_growth_rate - 0.03, fcf_growth_rate - 0.015, fcf_growth_rate, fcf_growth_rate + 0.015, fcf_growth_rate + 0.03]
+                        discount_rates = [discount_rate - 0.02, discount_rate - 0.01, discount_rate, discount_rate + 0.01, discount_rate + 0.02]
+
+                        sensitivity_data = []
+                        for gr in growth_rates:
+                            row = {"Growth Rate": f"{gr*100:.1f}%"}
+                            for dr in discount_rates:
+                                # Recalculate intrinsic value
+                                temp_fcf = []
+                                temp_f = free_cash_flow
+                                for _ in range(projection_years):
+                                    temp_f = temp_f * (1 + gr)
+                                    temp_fcf.append(temp_f)
+                                temp_pv = [f / ((1 + dr) ** (i + 1)) for i, f in enumerate(temp_fcf)]
+                                temp_terminal = temp_fcf[-1] * (1 + terminal_growth) / (dr - terminal_growth)
+                                temp_pv_terminal = temp_terminal / ((1 + dr) ** projection_years)
+                                temp_ev = sum(temp_pv) + temp_pv_terminal
+                                temp_equity = temp_ev - net_debt
+                                temp_iv = temp_equity / shares_outstanding if shares_outstanding > 0 else 0
+                                row[f"WACC {dr*100:.0f}%"] = f"${temp_iv:.0f}"
+                            sensitivity_data.append(row)
+
+                        sens_df = pd.DataFrame(sensitivity_data)
+                        st.dataframe(sens_df, hide_index=True, use_container_width=True)
+
+                    else:
+                        st.warning("DCF analysis requires positive free cash flow. This company may have negative FCF or data is unavailable.")
+                        if free_cash_flow:
+                            st.markdown(f"**Current FCF:** ${free_cash_flow/1e9:.2f}B")
+
+                # ── RELATIVE VALUATION ──
+                with val_tab2:
+                    st.markdown("### Relative Valuation")
+                    st.caption("Compare valuation multiples to peers and market averages")
+
+                    # Current multiples
+                    st.markdown("#### Current Valuation Multiples")
+                    mult_cols = st.columns(4)
+
+                    with mult_cols[0]:
+                        st.metric("P/E (TTM)", f"{pe_ratio:.1f}x" if pe_ratio else "N/A",
+                                 delta="High" if pe_ratio and pe_ratio > 30 else "Low" if pe_ratio and pe_ratio < 15 else None)
+                        st.metric("Forward P/E", f"{forward_pe:.1f}x" if forward_pe else "N/A")
+
+                    with mult_cols[1]:
+                        st.metric("PEG Ratio", f"{peg_ratio:.2f}" if peg_ratio else "N/A",
+                                 delta="Expensive" if peg_ratio and peg_ratio > 2 else "Cheap" if peg_ratio and peg_ratio < 1 else None)
+                        st.metric("P/B Ratio", f"{pb_ratio:.1f}x" if pb_ratio else "N/A")
+
+                    with mult_cols[2]:
+                        st.metric("P/S Ratio", f"{ps_ratio:.1f}x" if ps_ratio else "N/A")
+                        st.metric("EV/Revenue", f"{ev_revenue:.1f}x" if ev_revenue else "N/A")
+
+                    with mult_cols[3]:
+                        st.metric("EV/EBITDA", f"{ev_ebitda:.1f}x" if ev_ebitda else "N/A",
+                                 delta="High" if ev_ebitda and ev_ebitda > 20 else "Low" if ev_ebitda and ev_ebitda < 10 else None)
+
+                    st.markdown("---")
+
+                    # P/E Based Valuation
+                    st.markdown("#### P/E Based Valuation")
+                    pe_col1, pe_col2 = st.columns(2)
+
+                    with pe_col1:
+                        target_pe = st.number_input("Target P/E Multiple", 10.0, 50.0, 20.0, 1.0, key="target_pe")
+
+                    with pe_col2:
+                        if trailing_eps and trailing_eps > 0:
+                            pe_fair_value = trailing_eps * target_pe
+                            pe_upside = ((pe_fair_value - current_price) / current_price) * 100
+                            st.metric("P/E Fair Value", f"${pe_fair_value:.2f}",
+                                     delta=f"{pe_upside:+.1f}% vs current",
+                                     delta_color="normal" if pe_upside > 0 else "inverse")
+                        else:
+                            st.warning("EPS data not available")
+
+                    # EV/EBITDA Based Valuation
+                    st.markdown("#### EV/EBITDA Based Valuation")
+                    ev_col1, ev_col2 = st.columns(2)
+
+                    with ev_col1:
+                        target_ev_ebitda = st.number_input("Target EV/EBITDA Multiple", 5.0, 30.0, 12.0, 0.5, key="target_ev")
+
+                    with ev_col2:
+                        if ebitda and ebitda > 0:
+                            ev_fair = ebitda * target_ev_ebitda
+                            equity_fair = ev_fair - net_debt if 'net_debt' in dir() else ev_fair - (total_debt - total_cash)
+                            ev_fair_per_share = equity_fair / shares_outstanding if shares_outstanding > 0 else 0
+                            ev_upside = ((ev_fair_per_share - current_price) / current_price) * 100
+                            st.metric("EV/EBITDA Fair Value", f"${ev_fair_per_share:.2f}",
+                                     delta=f"{ev_upside:+.1f}% vs current",
+                                     delta_color="normal" if ev_upside > 0 else "inverse")
+                        else:
+                            st.warning("EBITDA data not available")
+
+                    # Sector comparison placeholder
+                    st.markdown("---")
+                    st.markdown("#### Sector Comparison")
+                    sector_averages = {
+                        "Technology": {"P/E": 28, "EV/EBITDA": 18, "P/S": 6},
+                        "Healthcare": {"P/E": 22, "EV/EBITDA": 14, "P/S": 4},
+                        "Financial Services": {"P/E": 12, "EV/EBITDA": 8, "P/S": 2},
+                        "Consumer Cyclical": {"P/E": 20, "EV/EBITDA": 12, "P/S": 1.5},
+                        "Consumer Defensive": {"P/E": 24, "EV/EBITDA": 14, "P/S": 2},
+                        "Energy": {"P/E": 10, "EV/EBITDA": 6, "P/S": 1},
+                        "Industrials": {"P/E": 18, "EV/EBITDA": 10, "P/S": 1.5},
+                        "Communication Services": {"P/E": 20, "EV/EBITDA": 10, "P/S": 3},
+                    }
+
+                    if sector in sector_averages:
+                        sector_avg = sector_averages[sector]
+                        comp_cols = st.columns(3)
+                        with comp_cols[0]:
+                            pe_diff = ((pe_ratio / sector_avg["P/E"]) - 1) * 100 if pe_ratio and sector_avg["P/E"] else 0
+                            st.metric(f"P/E vs {sector} Avg",
+                                     f"{pe_ratio:.1f}x vs {sector_avg['P/E']}x",
+                                     delta=f"{pe_diff:+.0f}%",
+                                     delta_color="inverse" if pe_diff > 20 else "normal")
+                        with comp_cols[1]:
+                            ev_diff = ((ev_ebitda / sector_avg["EV/EBITDA"]) - 1) * 100 if ev_ebitda and sector_avg["EV/EBITDA"] else 0
+                            st.metric(f"EV/EBITDA vs {sector} Avg",
+                                     f"{ev_ebitda:.1f}x vs {sector_avg['EV/EBITDA']}x",
+                                     delta=f"{ev_diff:+.0f}%",
+                                     delta_color="inverse" if ev_diff > 20 else "normal")
+                        with comp_cols[2]:
+                            ps_diff = ((ps_ratio / sector_avg["P/S"]) - 1) * 100 if ps_ratio and sector_avg["P/S"] else 0
+                            st.metric(f"P/S vs {sector} Avg",
+                                     f"{ps_ratio:.1f}x vs {sector_avg['P/S']}x",
+                                     delta=f"{ps_diff:+.0f}%",
+                                     delta_color="inverse" if ps_diff > 20 else "normal")
+                    else:
+                        st.info(f"Sector averages not available for {sector}")
+
+                # ── FUNDAMENTAL ANALYSIS ──
+                with val_tab3:
+                    st.markdown("### Fundamental Analysis")
+                    st.caption("Profitability, growth, and efficiency metrics")
+
+                    # Profitability
+                    st.markdown("#### Profitability Metrics")
+                    prof_cols = st.columns(4)
+
+                    with prof_cols[0]:
+                        margin_color = "normal" if gross_margin and gross_margin > 0.4 else "inverse" if gross_margin and gross_margin < 0.2 else "off"
+                        st.metric("Gross Margin", f"{gross_margin*100:.1f}%" if gross_margin else "N/A",
+                                 delta="Strong" if gross_margin and gross_margin > 0.4 else "Weak" if gross_margin and gross_margin < 0.2 else None,
+                                 delta_color=margin_color)
+
+                    with prof_cols[1]:
+                        st.metric("Operating Margin", f"{operating_margin*100:.1f}%" if operating_margin else "N/A",
+                                 delta="Strong" if operating_margin and operating_margin > 0.2 else None)
+
+                    with prof_cols[2]:
+                        st.metric("Profit Margin", f"{profit_margin*100:.1f}%" if profit_margin else "N/A")
+
+                    with prof_cols[3]:
+                        st.metric("EBITDA Margin", f"{(ebitda/total_revenue)*100:.1f}%" if ebitda and total_revenue else "N/A")
+
+                    st.markdown("---")
+
+                    # Returns
+                    st.markdown("#### Return Metrics")
+                    ret_cols = st.columns(3)
+
+                    with ret_cols[0]:
+                        roe_color = "normal" if roe and roe > 0.15 else "inverse" if roe and roe < 0.05 else "off"
+                        st.metric("Return on Equity (ROE)", f"{roe*100:.1f}%" if roe else "N/A",
+                                 delta="Excellent" if roe and roe > 0.2 else "Good" if roe and roe > 0.15 else None,
+                                 delta_color=roe_color)
+                        if roe:
+                            if roe > 0.20:
+                                st.caption("🟢 Exceptional profitability")
+                            elif roe > 0.15:
+                                st.caption("🟢 Strong profitability")
+                            elif roe > 0.10:
+                                st.caption("🟡 Average profitability")
+                            else:
+                                st.caption("🔴 Below-average profitability")
+
+                    with ret_cols[1]:
+                        st.metric("Return on Assets (ROA)", f"{roa*100:.1f}%" if roa else "N/A")
+                        if roa:
+                            if roa > 0.10:
+                                st.caption("🟢 Efficient asset utilization")
+                            elif roa > 0.05:
+                                st.caption("🟡 Average efficiency")
+                            else:
+                                st.caption("🔴 Low asset efficiency")
+
+                    with ret_cols[2]:
+                        # Calculate ROIC estimate
+                        if ebitda and enterprise_value and enterprise_value > 0:
+                            roic_est = ebitda / enterprise_value
+                            st.metric("ROIC (Est)", f"{roic_est*100:.1f}%")
+                        else:
+                            st.metric("ROIC", "N/A")
+
+                    st.markdown("---")
+
+                    # Growth
+                    st.markdown("#### Growth Metrics")
+                    growth_cols = st.columns(3)
+
+                    with growth_cols[0]:
+                        rev_color = "normal" if revenue_growth and revenue_growth > 0.1 else "inverse" if revenue_growth and revenue_growth < 0 else "off"
+                        st.metric("Revenue Growth", f"{revenue_growth*100:.1f}%" if revenue_growth else "N/A",
+                                 delta="Strong" if revenue_growth and revenue_growth > 0.15 else "Declining" if revenue_growth and revenue_growth < 0 else None,
+                                 delta_color=rev_color)
+
+                    with growth_cols[1]:
+                        earn_color = "normal" if earnings_growth and earnings_growth > 0.1 else "inverse" if earnings_growth and earnings_growth < 0 else "off"
+                        st.metric("Earnings Growth", f"{earnings_growth*100:.1f}%" if earnings_growth else "N/A",
+                                 delta_color=earn_color)
+
+                    with growth_cols[2]:
+                        # 5-year revenue CAGR if available
+                        five_yr_growth = info.get('revenueGrowth', 0)
+                        st.metric("5Y Revenue CAGR", f"{five_yr_growth*100:.1f}%" if five_yr_growth else "N/A")
+
+                    st.markdown("---")
+
+                    # Analyst Ratings
+                    st.markdown("#### Analyst Estimates")
+                    target_high = info.get('targetHighPrice', 0)
+                    target_low = info.get('targetLowPrice', 0)
+                    target_mean = info.get('targetMeanPrice', 0)
+                    recommendation = info.get('recommendationKey', 'N/A')
+
+                    if target_mean:
+                        analyst_cols = st.columns(4)
+                        with analyst_cols[0]:
+                            st.metric("Target Low", f"${target_low:.2f}" if target_low else "N/A")
+                        with analyst_cols[1]:
+                            upside_mean = ((target_mean - current_price) / current_price) * 100
+                            st.metric("Target Mean", f"${target_mean:.2f}",
+                                     delta=f"{upside_mean:+.0f}%",
+                                     delta_color="normal" if upside_mean > 0 else "inverse")
+                        with analyst_cols[2]:
+                            st.metric("Target High", f"${target_high:.2f}" if target_high else "N/A")
+                        with analyst_cols[3]:
+                            rec_emoji = "🟢" if recommendation in ['buy', 'strongBuy'] else "🟡" if recommendation == 'hold' else "🔴"
+                            st.metric("Recommendation", f"{rec_emoji} {recommendation.upper()}")
+
+                # ── FINANCIAL HEALTH ──
+                with val_tab4:
+                    st.markdown("### Financial Health")
+                    st.caption("Balance sheet strength and credit metrics")
+
+                    # Liquidity
+                    st.markdown("#### Liquidity")
+                    liq_cols = st.columns(3)
+
+                    with liq_cols[0]:
+                        cr_color = "normal" if current_ratio and current_ratio > 1.5 else "inverse" if current_ratio and current_ratio < 1 else "off"
+                        st.metric("Current Ratio", f"{current_ratio:.2f}" if current_ratio else "N/A",
+                                 delta="Strong" if current_ratio and current_ratio > 2 else "Weak" if current_ratio and current_ratio < 1 else None,
+                                 delta_color=cr_color)
+                        if current_ratio:
+                            if current_ratio > 2:
+                                st.caption("🟢 Excellent liquidity")
+                            elif current_ratio > 1:
+                                st.caption("🟡 Adequate liquidity")
+                            else:
+                                st.caption("🔴 Liquidity concerns")
+
+                    with liq_cols[1]:
+                        st.metric("Total Cash", f"${total_cash/1e9:.1f}B" if total_cash else "N/A")
+
+                    with liq_cols[2]:
+                        st.metric("Free Cash Flow", f"${free_cash_flow/1e9:.2f}B" if free_cash_flow else "N/A",
+                                 delta="Positive" if free_cash_flow and free_cash_flow > 0 else "Negative",
+                                 delta_color="normal" if free_cash_flow and free_cash_flow > 0 else "inverse")
+
+                    st.markdown("---")
+
+                    # Leverage
+                    st.markdown("#### Leverage & Solvency")
+                    debt_cols = st.columns(3)
+
+                    with debt_cols[0]:
+                        de_color = "normal" if debt_to_equity and debt_to_equity < 100 else "inverse" if debt_to_equity and debt_to_equity > 200 else "off"
+                        st.metric("Debt/Equity", f"{debt_to_equity:.0f}%" if debt_to_equity else "N/A",
+                                 delta="High" if debt_to_equity and debt_to_equity > 150 else "Low" if debt_to_equity and debt_to_equity < 50 else None,
+                                 delta_color=de_color)
+
+                    with debt_cols[1]:
+                        st.metric("Total Debt", f"${total_debt/1e9:.1f}B" if total_debt else "N/A")
+
+                    with debt_cols[2]:
+                        net_debt_val = total_debt - total_cash if total_debt and total_cash else 0
+                        nd_color = "normal" if net_debt_val < 0 else "off"
+                        st.metric("Net Debt", f"${net_debt_val/1e9:.1f}B" if net_debt_val else "N/A",
+                                 delta="Net Cash" if net_debt_val < 0 else None,
+                                 delta_color=nd_color)
+
+                    # Interest coverage
+                    interest_expense = info.get('interestExpense', 0) or 0
+                    if ebitda and interest_expense and interest_expense > 0:
+                        interest_coverage = ebitda / interest_expense
+                        st.markdown("---")
+                        st.markdown("#### Interest Coverage")
+                        ic_color = "normal" if interest_coverage > 5 else "inverse" if interest_coverage < 2 else "off"
+                        st.metric("Interest Coverage Ratio", f"{interest_coverage:.1f}x",
+                                 delta="Strong" if interest_coverage > 5 else "Weak" if interest_coverage < 2 else None,
+                                 delta_color=ic_color)
+                        if interest_coverage > 5:
+                            st.caption("🟢 Company easily covers interest payments")
+                        elif interest_coverage > 2:
+                            st.caption("🟡 Adequate coverage")
+                        else:
+                            st.caption("🔴 May struggle to cover interest payments")
+
+                    # Credit Risk Summary
+                    st.markdown("---")
+                    st.markdown("#### Credit Risk Assessment")
+
+                    risk_score = 50  # Base
+                    risk_factors = []
+
+                    if current_ratio and current_ratio < 1:
+                        risk_score += 20
+                        risk_factors.append("Low current ratio")
+                    if debt_to_equity and debt_to_equity > 200:
+                        risk_score += 20
+                        risk_factors.append("High debt/equity")
+                    if free_cash_flow and free_cash_flow < 0:
+                        risk_score += 15
+                        risk_factors.append("Negative free cash flow")
+                    if interest_expense and ebitda:
+                        if ebitda / interest_expense < 2:
+                            risk_score += 15
+                            risk_factors.append("Low interest coverage")
+
+                    if current_ratio and current_ratio > 2:
+                        risk_score -= 10
+                    if debt_to_equity and debt_to_equity < 50:
+                        risk_score -= 10
+                    if free_cash_flow and free_cash_flow > 0:
+                        risk_score -= 10
+
+                    risk_score = max(0, min(100, risk_score))
+
+                    if risk_score < 30:
+                        st.success(f"🟢 **Low Credit Risk** (Score: {risk_score}/100) — Strong balance sheet with healthy liquidity and manageable debt.")
+                    elif risk_score < 60:
+                        st.info(f"🟡 **Moderate Credit Risk** (Score: {risk_score}/100) — Adequate financial health with some areas to monitor.")
+                    else:
+                        st.error(f"🔴 **Elevated Credit Risk** (Score: {risk_score}/100) — Balance sheet concerns. Risk factors: {', '.join(risk_factors)}")
+
+        except Exception as e:
+            loading_placeholder.empty()
+            st.error(f"Error analyzing {val_symbol}: {str(e)}")
+
+    elif val_symbol and not run_valuation:
+        st.info("👆 Click 'Run Valuation Analysis' to analyze the stock")
 
 
 # ═════════════════════════════════════════════
