@@ -165,6 +165,221 @@ def get_company_color(symbol: str) -> str:
     r, g, b = colorsys.hls_to_rgb(hue, 0.45, 0.65)
     return f"#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}"
 
+
+def get_sparkline_data(symbol: str, days: int = 7) -> list:
+    """Get price history for sparkline chart."""
+    import yfinance as yf
+    try:
+        ticker = yf.Ticker(symbol)
+        hist = ticker.history(period=f"{days}d")
+        if not hist.empty:
+            return hist['Close'].tolist()
+    except:
+        pass
+    return []
+
+
+def create_sparkline_svg(prices: list, color: str = "#00ff00", width: int = 80, height: int = 25) -> str:
+    """Create an SVG sparkline chart."""
+    if not prices or len(prices) < 2:
+        return ""
+
+    # Normalize prices to fit in the SVG
+    min_p, max_p = min(prices), max(prices)
+    range_p = max_p - min_p if max_p != min_p else 1
+
+    # Create points for the polyline
+    points = []
+    for i, p in enumerate(prices):
+        x = (i / (len(prices) - 1)) * width
+        y = height - ((p - min_p) / range_p) * height
+        points.append(f"{x:.1f},{y:.1f}")
+
+    # Determine color based on trend
+    trend_color = "#00C853" if prices[-1] >= prices[0] else "#FF5252"
+
+    svg = f'''<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg">
+        <polyline points="{' '.join(points)}" fill="none" stroke="{trend_color}" stroke-width="2"/>
+    </svg>'''
+    return svg
+
+
+def get_tax_loss_opportunities(holdings: list, tax_rate: float = 0.25) -> list:
+    """Identify tax-loss harvesting opportunities."""
+    opportunities = []
+
+    # Get total gains to offset
+    total_gains = sum(h.unrealized_pnl for h in holdings if h.unrealized_pnl > 0)
+
+    for h in holdings:
+        if h.unrealized_pnl < 0:  # Loss position
+            loss_amount = abs(h.unrealized_pnl)
+            tax_savings = loss_amount * tax_rate
+
+            # Find similar replacement stocks (same sector)
+            replacements = []
+            if h.sector:
+                sector_stocks = {
+                    "Technology": ["MSFT", "GOOGL", "CRM", "ADBE", "ORCL"],
+                    "Consumer Cyclical": ["AMZN", "TSLA", "HD", "NKE", "SBUX"],
+                    "Financial Services": ["JPM", "BAC", "GS", "MS", "V"],
+                    "Healthcare": ["JNJ", "UNH", "PFE", "ABBV", "MRK"],
+                    "Communication Services": ["META", "GOOG", "DIS", "NFLX", "T"],
+                    "Consumer Defensive": ["PG", "KO", "PEP", "WMT", "COST"],
+                    "Energy": ["XOM", "CVX", "COP", "SLB", "EOG"],
+                    "Industrials": ["CAT", "BA", "UNP", "HON", "UPS"],
+                    "Real Estate": ["AMT", "PLD", "CCI", "EQIX", "SPG"],
+                    "Utilities": ["NEE", "DUK", "SO", "D", "AEP"],
+                    "Basic Materials": ["LIN", "APD", "ECL", "SHW", "DD"],
+                }
+                sector_list = sector_stocks.get(h.sector, [])
+                replacements = [s for s in sector_list if s != h.symbol][:3]
+
+            opportunities.append({
+                "symbol": h.symbol,
+                "name": h.name,
+                "shares": h.shares,
+                "loss": h.unrealized_pnl,
+                "loss_pct": h.unrealized_pnl_pct,
+                "tax_savings": tax_savings,
+                "current_price": h.current_price,
+                "avg_cost": h.avg_cost,
+                "sector": h.sector,
+                "replacements": replacements,
+            })
+
+    # Sort by largest loss (most tax savings)
+    opportunities.sort(key=lambda x: x["loss"])
+    return opportunities
+
+
+def get_similar_stocks_recommendations(holdings: list) -> list:
+    """Get stock recommendations based on current holdings."""
+    recommendations = []
+    current_symbols = set(h.symbol for h in holdings)
+    current_sectors = set(h.sector for h in holdings if h.sector)
+
+    # Stock clusters (stocks often held together)
+    stock_clusters = {
+        "AAPL": ["MSFT", "GOOGL", "AMZN", "META", "NVDA"],
+        "MSFT": ["AAPL", "GOOGL", "AMZN", "CRM", "ADBE"],
+        "GOOGL": ["META", "MSFT", "AMZN", "NFLX", "AAPL"],
+        "AMZN": ["MSFT", "GOOGL", "AAPL", "SHOP", "COST"],
+        "NVDA": ["AMD", "AAPL", "MSFT", "TSM", "AVGO"],
+        "TSLA": ["RIVN", "NIO", "LCID", "F", "GM"],
+        "JPM": ["BAC", "GS", "MS", "WFC", "C"],
+        "V": ["MA", "PYPL", "SQ", "AXP", "COF"],
+        "JNJ": ["PFE", "UNH", "ABBV", "MRK", "LLY"],
+        "SPY": ["QQQ", "VTI", "VOO", "IWM", "DIA"],
+        "QQQ": ["SPY", "VGT", "XLK", "ARKK", "SMH"],
+        "VTI": ["VOO", "SPY", "VXUS", "BND", "VEA"],
+        "SCHD": ["VYM", "VIG", "DGRO", "HDV", "NOBL"],
+    }
+
+    # Popular additions by sector
+    sector_additions = {
+        "Technology": [
+            {"symbol": "NVDA", "reason": "AI leader, GPU dominance"},
+            {"symbol": "MSFT", "reason": "Cloud + AI integration"},
+            {"symbol": "AVGO", "reason": "Semiconductor diversification"},
+        ],
+        "Consumer Cyclical": [
+            {"symbol": "COST", "reason": "Defensive retail, membership model"},
+            {"symbol": "HD", "reason": "Housing market exposure"},
+        ],
+        "Financial Services": [
+            {"symbol": "V", "reason": "Payment network, recession-resistant"},
+            {"symbol": "BRK-B", "reason": "Diversified value play"},
+        ],
+        "Healthcare": [
+            {"symbol": "UNH", "reason": "Insurance + services combo"},
+            {"symbol": "LLY", "reason": "Weight loss drug momentum"},
+        ],
+    }
+
+    # Find recommendations based on holdings
+    for h in holdings:
+        if h.symbol in stock_clusters:
+            for rec in stock_clusters[h.symbol]:
+                if rec not in current_symbols:
+                    # Check if already recommended
+                    if not any(r["symbol"] == rec for r in recommendations):
+                        recommendations.append({
+                            "symbol": rec,
+                            "reason": f"Often held with {h.symbol}",
+                            "based_on": h.symbol,
+                            "type": "cluster"
+                        })
+
+    # Add sector-based recommendations
+    for sector in current_sectors:
+        if sector in sector_additions:
+            for rec in sector_additions[sector]:
+                if rec["symbol"] not in current_symbols:
+                    if not any(r["symbol"] == rec["symbol"] for r in recommendations):
+                        recommendations.append({
+                            "symbol": rec["symbol"],
+                            "reason": rec["reason"],
+                            "based_on": sector,
+                            "type": "sector"
+                        })
+
+    # Diversification suggestions (sectors not represented)
+    missing_sectors = {
+        "Technology": {"symbol": "VGT", "reason": "Tech sector ETF for diversification"},
+        "Healthcare": {"symbol": "XLV", "reason": "Healthcare exposure"},
+        "Financial Services": {"symbol": "XLF", "reason": "Financial sector exposure"},
+        "Energy": {"symbol": "XLE", "reason": "Energy sector exposure"},
+        "Real Estate": {"symbol": "VNQ", "reason": "Real estate exposure, dividend income"},
+    }
+
+    for sector, rec in missing_sectors.items():
+        if sector not in current_sectors and rec["symbol"] not in current_symbols:
+            if not any(r["symbol"] == rec["symbol"] for r in recommendations):
+                recommendations.append({
+                    "symbol": rec["symbol"],
+                    "reason": rec["reason"],
+                    "based_on": f"Missing {sector}",
+                    "type": "diversify"
+                })
+
+    return recommendations[:10]  # Limit to top 10
+
+
+def generate_portfolio_snapshot(holdings: list, summary: dict, username: str = "Investor") -> str:
+    """Generate a shareable text snapshot of portfolio."""
+    snapshot = f"""
+📊 {username}'s Portfolio Snapshot
+Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")}
+
+💰 SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━
+Total Value:    ${summary.get('total_value', 0):,.2f}
+Total P&L:      ${summary.get('total_pnl', 0):+,.2f} ({summary.get('total_pnl_pct', 0):+.2f}%)
+Holdings:       {len(holdings)}
+Dividend Yield: {summary.get('dividend_yield', 0):.2f}%
+
+📈 TOP HOLDINGS
+━━━━━━━━━━━━━━━━━━━━━━━━"""
+
+    # Sort by value
+    sorted_holdings = sorted(holdings, key=lambda h: h.market_value, reverse=True)
+
+    for h in sorted_holdings[:5]:
+        pnl_emoji = "🟢" if h.unrealized_pnl >= 0 else "🔴"
+        snapshot += f"\n{pnl_emoji} {h.symbol}: ${h.market_value:,.0f} ({h.unrealized_pnl_pct:+.1f}%)"
+
+    if len(holdings) > 5:
+        snapshot += f"\n   ...and {len(holdings) - 5} more"
+
+    snapshot += """
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+Powered by OptiMax 📱
+"""
+    return snapshot
+
+
 # ─────────────────────────────────────────────
 # Page Config
 # ─────────────────────────────────────────────
@@ -1529,7 +1744,7 @@ with tab_portfolio:
 
         st.markdown("---")
 
-        # ── Holdings Table ──
+        # ── Holdings with Sparkline Cards ──
         st.markdown("### Holdings")
 
         # Refresh button
@@ -1547,45 +1762,136 @@ with tab_portfolio:
                     st.session_state.holdings = refreshed
                     st.rerun()
 
-        # Build holdings dataframe
-        holdings_data = []
-        for h in st.session_state.holdings:
-            holdings_data.append({
-                "Symbol": h.symbol,
-                "Name": h.name[:25] + "..." if len(h.name) > 25 else h.name,
-                "Type": h.asset_type,
-                "Shares": h.shares,
-                "Price": h.current_price,
-                "Avg Cost": h.avg_cost,
-                "Purchased": h.purchase_date.strftime("%Y-%m-%d") if h.purchase_date else "-",
-                "Value": h.market_value,
-                "P&L": h.unrealized_pnl,
-                "P&L %": h.unrealized_pnl_pct,
-                "Div Yield": h.dividend_yield * 100,
-                "Income": h.annual_income,
-                "Beta": h.beta,
-            })
+        # View toggle
+        view_mode = st.radio("View", ["Cards", "Table"], horizontal=True, key="holdings_view")
 
-        holdings_df = pd.DataFrame(holdings_data)
+        if view_mode == "Cards":
+            # ── Sparkline Cards with Glow Effects ──
+            # Cache sparkline data in session
+            if "sparkline_cache" not in st.session_state:
+                st.session_state.sparkline_cache = {}
 
-        # Format for display
-        display_df = holdings_df.copy()
-        display_df["Price"] = display_df["Price"].apply(lambda x: f"${x:,.2f}")
-        display_df["Avg Cost"] = display_df["Avg Cost"].apply(lambda x: f"${x:,.2f}")
-        display_df["Value"] = display_df["Value"].apply(lambda x: f"${x:,.2f}")
-        display_df["P&L"] = display_df["P&L"].apply(lambda x: f"${x:+,.2f}")
-        display_df["P&L %"] = display_df["P&L %"].apply(lambda x: f"{x:+.2f}%")
-        display_df["Div Yield"] = display_df["Div Yield"].apply(lambda x: f"{x:.2f}%")
-        display_df["Income"] = display_df["Income"].apply(lambda x: f"${x:,.2f}")
-        display_df["Beta"] = display_df["Beta"].apply(lambda x: f"{x:.2f}" if x else "-")
-        display_df["Shares"] = display_df["Shares"].apply(lambda x: f"{x:,.2f}")
+            # Load sparklines for holdings not in cache
+            for h in st.session_state.holdings:
+                if h.symbol not in st.session_state.sparkline_cache:
+                    prices = get_sparkline_data(h.symbol, days=7)
+                    st.session_state.sparkline_cache[h.symbol] = prices
 
-        st.dataframe(
-            display_df,
-            use_container_width=True,
-            hide_index=True,
-            height=min(400, 35 * len(holdings_df) + 38),
-        )
+            # Display cards in grid
+            cols_per_row = 3
+            sorted_holdings = sorted(st.session_state.holdings, key=lambda x: x.market_value, reverse=True)
+
+            for i in range(0, len(sorted_holdings), cols_per_row):
+                cols = st.columns(cols_per_row)
+                for j, col in enumerate(cols):
+                    if i + j < len(sorted_holdings):
+                        h = sorted_holdings[i + j]
+
+                        # Determine card color based on P&L
+                        if h.unrealized_pnl_pct > 10:
+                            glow_color = "0, 200, 83"  # Strong green
+                            border_color = "#00C853"
+                        elif h.unrealized_pnl_pct > 0:
+                            glow_color = "76, 175, 80"  # Light green
+                            border_color = "#4CAF50"
+                        elif h.unrealized_pnl_pct > -10:
+                            glow_color = "255, 82, 82"  # Light red
+                            border_color = "#FF5252"
+                        else:
+                            glow_color = "211, 47, 47"  # Strong red
+                            border_color = "#D32F2F"
+
+                        # Get sparkline
+                        prices = st.session_state.sparkline_cache.get(h.symbol, [])
+                        sparkline_svg = create_sparkline_svg(prices) if prices else ""
+
+                        # Create card with glow effect
+                        pnl_sign = "+" if h.unrealized_pnl >= 0 else ""
+                        card_html = f"""
+                        <div style='
+                            background: linear-gradient(145deg, #2E2E2E, #252525);
+                            border-radius: 12px;
+                            padding: 16px;
+                            margin: 8px 0;
+                            border-left: 4px solid {border_color};
+                            box-shadow: 0 0 15px rgba({glow_color}, 0.3);
+                            transition: all 0.3s ease;
+                        '>
+                            <div style='display: flex; justify-content: space-between; align-items: start;'>
+                                <div>
+                                    <span style='font-size: 1.3em; font-weight: bold; color: white;'>{h.symbol}</span>
+                                    <br>
+                                    <span style='color: #888; font-size: 0.85em;'>{h.name[:20]}{"..." if len(h.name) > 20 else ""}</span>
+                                </div>
+                                <div style='text-align: right;'>
+                                    {sparkline_svg}
+                                </div>
+                            </div>
+                            <div style='margin-top: 12px; display: flex; justify-content: space-between;'>
+                                <div>
+                                    <span style='color: #888; font-size: 0.8em;'>Value</span><br>
+                                    <span style='color: white; font-size: 1.1em; font-weight: bold;'>${h.market_value:,.0f}</span>
+                                </div>
+                                <div style='text-align: center;'>
+                                    <span style='color: #888; font-size: 0.8em;'>Shares</span><br>
+                                    <span style='color: white;'>{h.shares:,.2f}</span>
+                                </div>
+                                <div style='text-align: right;'>
+                                    <span style='color: #888; font-size: 0.8em;'>P&L</span><br>
+                                    <span style='color: {border_color}; font-size: 1.1em; font-weight: bold;'>{pnl_sign}{h.unrealized_pnl_pct:.1f}%</span>
+                                </div>
+                            </div>
+                            <div style='margin-top: 8px; padding-top: 8px; border-top: 1px solid #444;'>
+                                <span style='color: #888; font-size: 0.75em;'>
+                                    ${h.current_price:,.2f} • Avg: ${h.avg_cost:,.2f} • {h.unrealized_pnl:+,.0f}
+                                </span>
+                            </div>
+                        </div>
+                        """
+                        with col:
+                            st.markdown(card_html, unsafe_allow_html=True)
+
+        else:
+            # ── Traditional Table View ──
+            # Build holdings dataframe
+            holdings_data = []
+            for h in st.session_state.holdings:
+                holdings_data.append({
+                    "Symbol": h.symbol,
+                    "Name": h.name[:25] + "..." if len(h.name) > 25 else h.name,
+                    "Type": h.asset_type,
+                    "Shares": h.shares,
+                    "Price": h.current_price,
+                    "Avg Cost": h.avg_cost,
+                    "Purchased": h.purchase_date.strftime("%Y-%m-%d") if h.purchase_date else "-",
+                    "Value": h.market_value,
+                    "P&L": h.unrealized_pnl,
+                    "P&L %": h.unrealized_pnl_pct,
+                    "Div Yield": h.dividend_yield * 100,
+                    "Income": h.annual_income,
+                    "Beta": h.beta,
+                })
+
+            holdings_df = pd.DataFrame(holdings_data)
+
+            # Format for display
+            display_df = holdings_df.copy()
+            display_df["Price"] = display_df["Price"].apply(lambda x: f"${x:,.2f}")
+            display_df["Avg Cost"] = display_df["Avg Cost"].apply(lambda x: f"${x:,.2f}")
+            display_df["Value"] = display_df["Value"].apply(lambda x: f"${x:,.2f}")
+            display_df["P&L"] = display_df["P&L"].apply(lambda x: f"${x:+,.2f}")
+            display_df["P&L %"] = display_df["P&L %"].apply(lambda x: f"{x:+.2f}%")
+            display_df["Div Yield"] = display_df["Div Yield"].apply(lambda x: f"{x:.2f}%")
+            display_df["Income"] = display_df["Income"].apply(lambda x: f"${x:,.2f}")
+            display_df["Beta"] = display_df["Beta"].apply(lambda x: f"{x:.2f}" if x else "-")
+            display_df["Shares"] = display_df["Shares"].apply(lambda x: f"{x:,.2f}")
+
+            st.dataframe(
+                display_df,
+                use_container_width=True,
+                hide_index=True,
+                height=min(400, 35 * len(holdings_df) + 38),
+            )
 
         # ── Edit Holdings ──
         with st.expander("Edit Holdings"):
@@ -2204,6 +2510,284 @@ with tab_portfolio:
                 st.rerun()
         elif uploaded_file:
             st.warning("Could not parse CSV. Use format: Symbol,Shares,Cost,Date,Notes")
+
+    # ═══════════════════════════════════════════
+    # Smart Tools Section
+    # ═══════════════════════════════════════════
+    if st.session_state.holdings:
+        st.markdown("---")
+        st.markdown("### Smart Tools")
+
+        smart_tab1, smart_tab2, smart_tab3, smart_tab4 = st.tabs([
+            "🔮 What-If Simulator",
+            "💸 Tax-Loss Harvesting",
+            "🎯 Similar Investors Bought",
+            "📤 Share Portfolio"
+        ])
+
+        # ── What-If Simulator ──
+        with smart_tab1:
+            st.markdown("#### What-If Simulator")
+            st.caption("See how buying or selling affects your portfolio")
+
+            sim_col1, sim_col2, sim_col3 = st.columns([1.5, 1, 1])
+
+            with sim_col1:
+                sim_options = ["Buy New Stock"] + [f"{h.symbol} - {h.name[:20]}" for h in st.session_state.holdings]
+                sim_selection = st.selectbox("Select Stock", sim_options, key="sim_stock")
+
+            with sim_col2:
+                sim_action = st.radio("Action", ["Buy", "Sell"], horizontal=True, key="sim_action")
+
+            with sim_col3:
+                sim_shares = st.number_input("Shares", min_value=1, value=10, step=1, key="sim_shares")
+
+            # New stock input
+            if sim_selection == "Buy New Stock":
+                sim_new_symbol = st.text_input("Enter Ticker Symbol", key="sim_new_symbol").upper().strip()
+                if sim_new_symbol:
+                    sim_data = fetch_security_data(sim_new_symbol)
+                    if sim_data:
+                        sim_price = sim_data.get("current_price", 0)
+                        sim_cost = sim_shares * sim_price
+
+                        st.markdown(f"**{sim_new_symbol}** - {sim_data.get('name', 'Unknown')}")
+                        st.markdown(f"Current Price: **${sim_price:,.2f}**")
+                        st.markdown(f"Cost to Buy {sim_shares} shares: **${sim_cost:,.2f}**")
+
+                        # Portfolio impact
+                        current_total = sum(h.market_value for h in st.session_state.holdings)
+                        new_total = current_total + sim_cost
+                        new_weight = (sim_cost / new_total) * 100
+
+                        st.markdown("---")
+                        st.markdown("**Portfolio Impact:**")
+                        impact_cols = st.columns(3)
+                        with impact_cols[0]:
+                            st.metric("Current Value", f"${current_total:,.0f}")
+                        with impact_cols[1]:
+                            st.metric("New Value", f"${new_total:,.0f}", delta=f"+${sim_cost:,.0f}")
+                        with impact_cols[2]:
+                            st.metric("New Position Weight", f"{new_weight:.1f}%")
+            else:
+                # Existing holding
+                sim_symbol = sim_selection.split(" - ")[0]
+                sim_holding = next((h for h in st.session_state.holdings if h.symbol == sim_symbol), None)
+
+                if sim_holding:
+                    sim_price = sim_holding.current_price
+                    sim_value_change = sim_shares * sim_price
+
+                    if sim_action == "Buy":
+                        new_shares = sim_holding.shares + sim_shares
+                        new_cost = ((sim_holding.avg_cost * sim_holding.shares) + (sim_price * sim_shares)) / new_shares
+                        new_value = new_shares * sim_price
+
+                        st.markdown(f"**Buying {sim_shares} more shares of {sim_symbol}**")
+
+                        what_if_cols = st.columns(4)
+                        with what_if_cols[0]:
+                            st.metric("Current Shares", f"{sim_holding.shares:,.2f}")
+                        with what_if_cols[1]:
+                            st.metric("New Shares", f"{new_shares:,.2f}", delta=f"+{sim_shares}")
+                        with what_if_cols[2]:
+                            st.metric("New Avg Cost", f"${new_cost:,.2f}", delta=f"${new_cost - sim_holding.avg_cost:+,.2f}")
+                        with what_if_cols[3]:
+                            st.metric("Cost", f"${sim_value_change:,.0f}")
+
+                    else:  # Sell
+                        if sim_shares > sim_holding.shares:
+                            st.error(f"You only have {sim_holding.shares:.2f} shares to sell")
+                        else:
+                            new_shares = sim_holding.shares - sim_shares
+                            realized_pnl = sim_shares * (sim_price - sim_holding.avg_cost)
+                            proceeds = sim_shares * sim_price
+
+                            st.markdown(f"**Selling {sim_shares} shares of {sim_symbol}**")
+
+                            what_if_cols = st.columns(4)
+                            with what_if_cols[0]:
+                                st.metric("Current Shares", f"{sim_holding.shares:,.2f}")
+                            with what_if_cols[1]:
+                                st.metric("Remaining", f"{new_shares:,.2f}", delta=f"-{sim_shares}")
+                            with what_if_cols[2]:
+                                st.metric("Proceeds", f"${proceeds:,.0f}")
+                            with what_if_cols[3]:
+                                pnl_color = "normal" if realized_pnl >= 0 else "inverse"
+                                st.metric("Realized P&L", f"${realized_pnl:+,.0f}", delta_color=pnl_color)
+
+                            if realized_pnl < 0:
+                                tax_savings = abs(realized_pnl) * 0.25
+                                st.info(f"💡 This loss could save ~${tax_savings:,.0f} in taxes (at 25% rate)")
+
+        # ── Tax-Loss Harvesting ──
+        with smart_tab2:
+            st.markdown("#### Tax-Loss Harvesting Opportunities")
+            st.caption("Identify positions to sell for tax benefits")
+
+            opportunities = get_tax_loss_opportunities(st.session_state.holdings)
+
+            if opportunities:
+                total_losses = sum(o["loss"] for o in opportunities)
+                total_savings = sum(o["tax_savings"] for o in opportunities)
+
+                summary_cols = st.columns(3)
+                with summary_cols[0]:
+                    st.metric("Harvestable Losses", f"${abs(total_losses):,.0f}")
+                with summary_cols[1]:
+                    st.metric("Potential Tax Savings", f"${total_savings:,.0f}", delta="at 25% rate")
+                with summary_cols[2]:
+                    st.metric("Positions with Losses", len(opportunities))
+
+                st.markdown("---")
+
+                for opp in opportunities:
+                    loss_severity = "🔴" if opp["loss_pct"] < -20 else "🟠" if opp["loss_pct"] < -10 else "🟡"
+
+                    with st.expander(f"{loss_severity} {opp['symbol']} — Loss: ${abs(opp['loss']):,.0f} ({opp['loss_pct']:.1f}%)"):
+                        opp_cols = st.columns([2, 1, 1])
+
+                        with opp_cols[0]:
+                            st.markdown(f"**{opp['name']}**")
+                            st.markdown(f"Sector: {opp['sector'] or 'Unknown'}")
+                            st.markdown(f"Shares: {opp['shares']:,.2f}")
+
+                        with opp_cols[1]:
+                            st.markdown("**Cost Basis**")
+                            st.markdown(f"${opp['avg_cost']:,.2f}/share")
+                            st.markdown(f"Total: ${opp['avg_cost'] * opp['shares']:,.0f}")
+
+                        with opp_cols[2]:
+                            st.markdown("**Current Value**")
+                            st.markdown(f"${opp['current_price']:,.2f}/share")
+                            st.markdown(f"Tax Savings: **${opp['tax_savings']:,.0f}**")
+
+                        if opp["replacements"]:
+                            st.markdown("---")
+                            st.markdown("**Similar Stocks to Maintain Exposure** (avoid wash sale):")
+                            st.markdown(", ".join([f"`{r}`" for r in opp["replacements"]]))
+                            st.caption("⚠️ Wait 31 days before repurchasing the same stock to avoid wash sale rules")
+            else:
+                st.success("🎉 No tax-loss harvesting opportunities — all positions are profitable!")
+
+        # ── Similar Investors Bought ──
+        with smart_tab3:
+            st.markdown("#### Stocks Similar Investors Bought")
+            st.caption("Based on your current holdings, here are stocks that complement your portfolio")
+
+            recommendations = get_similar_stocks_recommendations(st.session_state.holdings)
+
+            if recommendations:
+                # Group by type
+                cluster_recs = [r for r in recommendations if r["type"] == "cluster"]
+                sector_recs = [r for r in recommendations if r["type"] == "sector"]
+                diversify_recs = [r for r in recommendations if r["type"] == "diversify"]
+
+                if cluster_recs:
+                    st.markdown("**🔗 Often Held Together**")
+                    for rec in cluster_recs[:4]:
+                        rec_data = fetch_security_data(rec["symbol"])
+                        if rec_data:
+                            price = rec_data.get("current_price", 0)
+                            name = rec_data.get("name", rec["symbol"])
+
+                            st.markdown(f"""
+                            <div style='background: #2E2E2E; padding: 12px; border-radius: 8px; margin: 8px 0;
+                                        border-left: 3px solid #4da6ff;'>
+                                <b>{rec['symbol']}</b> — {name[:30]}<br>
+                                <span style='color: #888;'>Because you own {rec['based_on']}</span><br>
+                                <span style='color: #4da6ff;'>${price:,.2f}</span>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                if sector_recs:
+                    st.markdown("**📊 Sector Leaders**")
+                    for rec in sector_recs[:3]:
+                        rec_data = fetch_security_data(rec["symbol"])
+                        if rec_data:
+                            price = rec_data.get("current_price", 0)
+                            name = rec_data.get("name", rec["symbol"])
+
+                            st.markdown(f"""
+                            <div style='background: #2E2E2E; padding: 12px; border-radius: 8px; margin: 8px 0;
+                                        border-left: 3px solid #00C853;'>
+                                <b>{rec['symbol']}</b> — {name[:30]}<br>
+                                <span style='color: #888;'>{rec['reason']}</span><br>
+                                <span style='color: #00C853;'>${price:,.2f}</span>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                if diversify_recs:
+                    st.markdown("**🌐 Diversification Ideas**")
+                    for rec in diversify_recs[:3]:
+                        rec_data = fetch_security_data(rec["symbol"])
+                        if rec_data:
+                            price = rec_data.get("current_price", 0)
+                            name = rec_data.get("name", rec["symbol"])
+
+                            st.markdown(f"""
+                            <div style='background: #2E2E2E; padding: 12px; border-radius: 8px; margin: 8px 0;
+                                        border-left: 3px solid #FFB300;'>
+                                <b>{rec['symbol']}</b> — {name[:30]}<br>
+                                <span style='color: #888;'>{rec['reason']}</span><br>
+                                <span style='color: #FFB300;'>${price:,.2f}</span>
+                            </div>
+                            """, unsafe_allow_html=True)
+            else:
+                st.info("Add more holdings to get personalized recommendations")
+
+        # ── Share Portfolio ──
+        with smart_tab4:
+            st.markdown("#### Share Your Portfolio")
+            st.caption("Generate a shareable snapshot of your portfolio")
+
+            summary = calculate_portfolio_summary(st.session_state.holdings)
+            username = st.session_state.get("username", "Investor")
+
+            # Generate snapshot
+            snapshot_text = generate_portfolio_snapshot(st.session_state.holdings, summary, username)
+
+            # Display preview
+            st.markdown("**Preview:**")
+            st.code(snapshot_text, language=None)
+
+            # Copy button (download as text file)
+            share_col1, share_col2 = st.columns(2)
+
+            with share_col1:
+                st.download_button(
+                    "📥 Download Snapshot",
+                    snapshot_text,
+                    file_name=f"portfolio_snapshot_{datetime.now().strftime('%Y%m%d')}.txt",
+                    mime="text/plain",
+                    key="download_snapshot"
+                )
+
+            with share_col2:
+                # Generate a simple shareable stats card
+                total_value = summary.get("total_value", 0)
+                total_pnl_pct = summary.get("total_pnl_pct", 0)
+                num_holdings = len(st.session_state.holdings)
+
+                share_card = f"""
+Portfolio Stats:
+💰 ${total_value:,.0f} total value
+📈 {total_pnl_pct:+.1f}% all-time return
+📊 {num_holdings} holdings
+
+#OptiMax #Investing
+                """
+
+                st.download_button(
+                    "🐦 Copy for Social",
+                    share_card.strip(),
+                    file_name="portfolio_share.txt",
+                    mime="text/plain",
+                    key="share_social"
+                )
+
+            st.markdown("---")
+            st.markdown("**Privacy Note:** This snapshot does not include specific share counts or cost basis. Only symbols, values, and percentage returns are shown.")
 
 
 # ═════════════════════════════════════════════
