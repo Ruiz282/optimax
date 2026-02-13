@@ -59,9 +59,70 @@ from portfolio_manager import (
     NewsItem,
 )
 import io
+import json
+import os
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
+
+# ─────────────────────────────────────────────
+# User Data Persistence
+# ─────────────────────────────────────────────
+USER_DATA_DIR = os.path.join(os.path.dirname(__file__), "user_data")
+
+def ensure_user_data_dir():
+    """Create user data directory if it doesn't exist."""
+    if not os.path.exists(USER_DATA_DIR):
+        os.makedirs(USER_DATA_DIR)
+
+def get_user_data_path(username: str) -> str:
+    """Get path to user's data file."""
+    ensure_user_data_dir()
+    safe_username = "".join(c for c in username if c.isalnum() or c in "-_").lower()
+    return os.path.join(USER_DATA_DIR, f"{safe_username}.json")
+
+def save_user_data(username: str, holdings: list, cash_balance: float = 0, watchlist: list = None):
+    """Save user's portfolio data to JSON file."""
+    if not username:
+        return
+
+    holdings_data = []
+    for h in holdings:
+        holdings_data.append({
+            "symbol": h.symbol,
+            "shares": h.shares,
+            "avg_cost": h.avg_cost,
+        })
+
+    watchlist_data = []
+    if watchlist:
+        for w in watchlist:
+            watchlist_data.append({
+                "symbol": w.symbol,
+                "added_date": w.added_date.isoformat() if hasattr(w.added_date, 'isoformat') else str(w.added_date),
+            })
+
+    data = {
+        "holdings": holdings_data,
+        "cash_balance": cash_balance,
+        "watchlist": watchlist_data,
+        "last_updated": datetime.now().isoformat(),
+    }
+
+    filepath = get_user_data_path(username)
+    with open(filepath, 'w') as f:
+        json.dump(data, f, indent=2)
+
+def load_user_data(username: str) -> dict:
+    """Load user's portfolio data from JSON file."""
+    if not username:
+        return None
+
+    filepath = get_user_data_path(username)
+    if os.path.exists(filepath):
+        with open(filepath, 'r') as f:
+            return json.load(f)
+    return None
 
 # Set dark theme for matplotlib charts
 plt.style.use('dark_background')
@@ -210,7 +271,21 @@ def login_form():
                     if login_user and login_pass:
                         st.session_state.authenticated = True
                         st.session_state.username = login_user
-                        st.success(f"Welcome, {login_user}!")
+                        # Load saved user data
+                        saved_data = load_user_data(login_user)
+                        if saved_data:
+                            st.session_state.holdings = []
+                            for h_data in saved_data.get("holdings", []):
+                                try:
+                                    holding = create_holding(h_data["symbol"], h_data["shares"], h_data["avg_cost"])
+                                    if holding:
+                                        st.session_state.holdings.append(holding)
+                                except:
+                                    pass
+                            st.session_state.cash_balance = saved_data.get("cash_balance", 0)
+                            st.success(f"Welcome back, {login_user}! Portfolio loaded.")
+                        else:
+                            st.success(f"Welcome, {login_user}!")
                         st.rerun()
                     else:
                         st.error("Please enter username and password")
@@ -223,7 +298,21 @@ def login_form():
                     if new_user and new_pass and new_pass == new_pass2:
                         st.session_state.authenticated = True
                         st.session_state.username = new_user
-                        st.success(f"Account created! Welcome, {new_user}!")
+                        # Check if user already has saved data
+                        saved_data = load_user_data(new_user)
+                        if saved_data:
+                            st.session_state.holdings = []
+                            for h_data in saved_data.get("holdings", []):
+                                try:
+                                    holding = create_holding(h_data["symbol"], h_data["shares"], h_data["avg_cost"])
+                                    if holding:
+                                        st.session_state.holdings.append(holding)
+                                except:
+                                    pass
+                            st.session_state.cash_balance = saved_data.get("cash_balance", 0)
+                            st.success(f"Welcome back, {new_user}! Portfolio loaded.")
+                        else:
+                            st.success(f"Account created! Welcome, {new_user}!")
                         st.rerun()
                     elif new_pass != new_pass2:
                         st.error("Passwords don't match")
@@ -1979,7 +2068,29 @@ with tab_portfolio:
     # IMPORT / EXPORT
     # ══════════════════════════════════════════════
     st.markdown("---")
-    st.markdown("### Import / Export")
+    st.markdown("### Save / Import / Export")
+
+    # Save Portfolio Button (for logged-in users)
+    if st.session_state.get("authenticated") and st.session_state.get("username"):
+        save_col1, save_col2 = st.columns([1, 3])
+        with save_col1:
+            if st.button("💾 Save Portfolio", key="save_portfolio", type="primary"):
+                try:
+                    save_user_data(
+                        st.session_state.username,
+                        st.session_state.holdings,
+                        st.session_state.get("cash_balance", 0),
+                        st.session_state.get("watchlist", [])
+                    )
+                    st.success("Portfolio saved!")
+                except Exception as e:
+                    st.error(f"Error saving: {e}")
+        with save_col2:
+            st.caption("Your portfolio will be automatically loaded next time you log in.")
+    else:
+        st.info("💡 Log in to save your portfolio and have it load automatically next time.")
+
+    st.markdown("---")
 
     exp_col1, exp_col2 = st.columns(2)
 
@@ -2072,7 +2183,20 @@ with tab_portfolio:
                                 st.session_state.holdings.append(holding)
                             success += 1
                     st.session_state.parsed_csv_holdings = None  # Clear cache
-                    st.success(f"Imported {success} holdings!")
+                    # Auto-save for logged-in users
+                    if st.session_state.get("authenticated") and st.session_state.get("username"):
+                        try:
+                            save_user_data(
+                                st.session_state.username,
+                                st.session_state.holdings,
+                                st.session_state.get("cash_balance", 0),
+                                st.session_state.get("watchlist", [])
+                            )
+                            st.success(f"Imported {success} holdings and saved to your account!")
+                        except:
+                            st.success(f"Imported {success} holdings!")
+                    else:
+                        st.success(f"Imported {success} holdings!")
                     st.rerun()
 
             if st.button("Clear", key="clear_csv"):
@@ -2258,20 +2382,20 @@ with tab_cash:
 
     with cash_tab3:
         st.markdown("### Best Money Market & Savings Yields")
-        st.caption("Current top yields from banks and brokerages (rates as of 2024)")
+        st.caption("Current top yields from banks and brokerages (rates as of January 2026)")
 
-        # Best yields data (this would ideally come from an API, but using static data for demo)
+        # Best yields data - Updated January 2026 from findbanks.com
         best_yields = [
-            {"name": "Vanguard Federal Money Market (VMFXX)", "type": "Money Market Fund", "apy": 5.28, "min": "$3,000", "notes": "Brokerage account required"},
-            {"name": "Fidelity Money Market (SPAXX)", "type": "Money Market Fund", "apy": 4.98, "min": "$0", "notes": "Fidelity account required"},
-            {"name": "Schwab Value Advantage Money (SWVXX)", "type": "Money Market Fund", "apy": 5.14, "min": "$0", "notes": "Schwab account required"},
-            {"name": "Wealthfront Cash Account", "type": "High-Yield Savings", "apy": 5.00, "min": "$0", "notes": "FDIC insured up to $8M"},
-            {"name": "Marcus by Goldman Sachs", "type": "High-Yield Savings", "apy": 4.50, "min": "$0", "notes": "FDIC insured"},
-            {"name": "Ally Bank Savings", "type": "High-Yield Savings", "apy": 4.25, "min": "$0", "notes": "No monthly fees"},
-            {"name": "Capital One 360", "type": "High-Yield Savings", "apy": 4.25, "min": "$0", "notes": "FDIC insured"},
-            {"name": "SoFi Checking & Savings", "type": "High-Yield Savings", "apy": 4.60, "min": "$0", "notes": "With direct deposit"},
-            {"name": "Betterment Cash Reserve", "type": "Cash Management", "apy": 4.75, "min": "$0", "notes": "FDIC insured up to $2M"},
-            {"name": "Treasury Bills (4-Week)", "type": "Government", "apy": 5.25, "min": "$100", "notes": "State tax exempt"},
+            {"name": "SoFi Checking & Savings", "type": "High-Yield Savings", "apy": 4.00, "min": "$0", "notes": "Up to $300 bonus, FDIC insured up to $3M"},
+            {"name": "Valley Bank", "type": "High-Yield Savings", "apy": 3.90, "min": "$1", "notes": "Up to $1,500 bonus with code HEADSTART"},
+            {"name": "Western Alliance Bank", "type": "High-Yield Savings", "apy": 3.80, "min": "$0", "notes": "No maintenance fees, FDIC insured"},
+            {"name": "E*TRADE Premium Savings", "type": "High-Yield Savings", "apy": 3.75, "min": "$0", "notes": "6-month promo rate, up to $2,000 bonus"},
+            {"name": "CIT Bank Platinum Savings", "type": "High-Yield Savings", "apy": 3.75, "min": "$100", "notes": "Tiered rates, FDIC insured"},
+            {"name": "American Express Savings", "type": "High-Yield Savings", "apy": 3.30, "min": "$0", "notes": "No monthly fees, daily compounding"},
+            {"name": "Vanguard Federal Money Market (VMFXX)", "type": "Money Market Fund", "apy": 4.20, "min": "$3,000", "notes": "Brokerage account required"},
+            {"name": "Fidelity Money Market (SPAXX)", "type": "Money Market Fund", "apy": 4.00, "min": "$0", "notes": "Fidelity account required"},
+            {"name": "Schwab Value Advantage Money (SWVXX)", "type": "Money Market Fund", "apy": 4.10, "min": "$0", "notes": "Schwab account required"},
+            {"name": "Treasury Bills (4-Week)", "type": "Government", "apy": 4.25, "min": "$100", "notes": "State tax exempt"},
         ]
 
         # Sort by APY
