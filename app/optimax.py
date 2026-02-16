@@ -321,7 +321,7 @@ if user_input and user_input.strip():
     pending = True
 
 if pending and st.session_state.sidebar_chat_messages and st.session_state.sidebar_chat_messages[-1]["role"] == "user":
-    groq_key = os.getenv("GROQ_API_KEY", "")
+    groq_key = os.getenv("GROQ_API_KEY", "") or st.secrets.get("GROQ_API_KEY", "")
     if not groq_key or groq_key == "your-api-key-here":
         st.sidebar.error("Set your GROQ_API_KEY in the .env file.")
     else:
