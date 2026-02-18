@@ -4707,12 +4707,29 @@ with tab_valuation:
                         st.caption(f"WACC = ({weight_equity:.0%} x {cost_of_equity:.1%}) + ({weight_debt:.0%} x {cost_of_debt:.1%}) = **{wacc_calculated:.2%}**  |  CAPM: Rf={risk_free:.1%} + {beta_val:.2f} x {market_premium:.1%}")
                         st.markdown("---")
 
+                        # ── Terminal Value Method ──
+                        tv_method = st.radio("Terminal Value Method", ["Perpetuity Growth Model", "Exit Multiple (EV/EBITDA)"], horizontal=True, key="tv_method")
+
+                        # Auto-estimate terminal growth from long-term nominal GDP (~2-3%)
+                        # Capped: terminal growth must be < WACC to avoid infinite TV
+                        long_term_gdp = 0.025  # US nominal GDP long-term avg ~2.5%
+                        auto_terminal_growth = min(long_term_gdp, wacc_calculated - 0.01)
+
+                        # Auto-estimate exit EV/EBITDA from current market multiple
+                        current_ev_ebitda = ev_ebitda if ev_ebitda and ev_ebitda > 0 else 12.0
+
                         dcf_col1, dcf_col2 = st.columns(2)
 
                         with dcf_col1:
                             st.markdown("**Assumptions**")
                             fcf_growth_rate = st.number_input("FCF Growth Rate % (Years 1-5)", min_value=0.0, max_value=50.0, value=min(max(revenue_growth * 100, 5.0), 30.0), step=0.5, key="fcf_growth") / 100
-                            terminal_growth = st.number_input("Terminal Growth Rate %", min_value=0.0, max_value=5.0, value=2.5, step=0.1, key="term_growth") / 100
+                            if tv_method == "Perpetuity Growth Model":
+                                terminal_growth = st.number_input("Terminal Growth Rate %", min_value=0.0, max_value=5.0, value=round(auto_terminal_growth * 100, 1), step=0.1, key="term_growth",
+                                                                  help=f"Auto-set to long-term nominal GDP (~2.5%), capped below WACC ({wacc_calculated:.1%}). Adjust if needed.") / 100
+                            else:
+                                exit_multiple = st.number_input("Exit EV/EBITDA Multiple", min_value=3.0, max_value=40.0, value=round(current_ev_ebitda, 1), step=0.5, key="exit_mult",
+                                                                help=f"Auto-set to current EV/EBITDA ({current_ev_ebitda:.1f}x). Adjust if needed.")
+                                terminal_growth = auto_terminal_growth  # still needed for sensitivity
                             discount_rate = st.number_input("Discount Rate (WACC) %", min_value=1.0, max_value=25.0, value=round(wacc_calculated * 100, 1), step=0.5, key="wacc_input",
                                                             help="Auto-calculated from WACC above. Adjust if needed.") / 100
                             projection_years = st.number_input("Projection Years", min_value=3, max_value=15, value=5, step=1, key="proj_years")
@@ -4724,7 +4741,8 @@ with tab_valuation:
                             st.markdown(f"- Total Debt: **${total_debt/1e9:.2f}B**")
                             st.markdown(f"- Total Cash: **${total_cash/1e9:.2f}B**")
                             st.markdown(f"- Revenue Growth: **{revenue_growth:.1%}**")
-                            st.markdown(f"- Effective Tax Rate: **{tax_rate_est:.1%}**")
+                            st.markdown(f"- EBITDA: **${ebitda/1e9:.2f}B**" if ebitda else "- EBITDA: **N/A**")
+                            st.markdown(f"- Current EV/EBITDA: **{current_ev_ebitda:.1f}x**")
 
                         # Calculate DCF
                         projected_fcf = []
@@ -4739,9 +4757,25 @@ with tab_valuation:
                             pv = fcf_val / ((1 + discount_rate) ** (i + 1))
                             pv_fcf.append(pv)
 
-                        # Terminal value
-                        terminal_fcf = projected_fcf[-1] * (1 + terminal_growth)
-                        terminal_value = terminal_fcf / (discount_rate - terminal_growth)
+                        # Terminal value calculation
+                        if tv_method == "Perpetuity Growth Model":
+                            # TV = FCFn * (1+g) / (WACC - g)
+                            if discount_rate <= terminal_growth:
+                                st.error("Discount rate must be greater than terminal growth rate. Adjust your inputs.")
+                                terminal_value = 0
+                                terminal_fcf = 0
+                            else:
+                                terminal_fcf = projected_fcf[-1] * (1 + terminal_growth)
+                                terminal_value = terminal_fcf / (discount_rate - terminal_growth)
+                        else:
+                            # Exit Multiple: TV = EBITDA_terminal * Exit Multiple
+                            # Estimate terminal EBITDA by growing current EBITDA at FCF growth rate
+                            terminal_ebitda = ebitda if ebitda and ebitda > 0 else projected_fcf[-1] * 1.5
+                            for _ in range(projection_years):
+                                terminal_ebitda = terminal_ebitda * (1 + fcf_growth_rate)
+                            terminal_value = terminal_ebitda * exit_multiple
+                            terminal_fcf = projected_fcf[-1]  # for display
+
                         pv_terminal = terminal_value / ((1 + discount_rate) ** projection_years)
 
                         # Enterprise value
@@ -4759,6 +4793,33 @@ with tab_valuation:
 
                         st.markdown("---")
                         st.markdown("### DCF Results")
+
+                        # Terminal value breakdown
+                        st.markdown("#### Terminal Value Breakdown")
+                        if tv_method == "Perpetuity Growth Model":
+                            tv_cols = st.columns(4)
+                            with tv_cols[0]:
+                                st.metric("Last Projected FCF", f"${projected_fcf[-1]/1e9:.2f}B")
+                            with tv_cols[1]:
+                                st.metric("Terminal FCF (FCFn x (1+g))", f"${terminal_fcf/1e9:.2f}B")
+                            with tv_cols[2]:
+                                st.metric("Terminal Value", f"${terminal_value/1e9:.1f}B")
+                            with tv_cols[3]:
+                                st.metric("PV of Terminal Value", f"${pv_terminal/1e9:.1f}B")
+                            tv_pct = (pv_terminal / dcf_enterprise_value * 100) if dcf_enterprise_value > 0 else 0
+                            st.caption(f"TV = ${projected_fcf[-1]/1e9:.2f}B x (1 + {terminal_growth:.1%}) / ({discount_rate:.1%} - {terminal_growth:.1%}) = **${terminal_value/1e9:.1f}B** | TV is **{tv_pct:.0f}%** of Enterprise Value")
+                        else:
+                            tv_cols = st.columns(4)
+                            with tv_cols[0]:
+                                st.metric("Terminal EBITDA", f"${terminal_ebitda/1e9:.2f}B")
+                            with tv_cols[1]:
+                                st.metric(f"Exit Multiple", f"{exit_multiple:.1f}x EV/EBITDA")
+                            with tv_cols[2]:
+                                st.metric("Terminal Value", f"${terminal_value/1e9:.1f}B")
+                            with tv_cols[3]:
+                                st.metric("PV of Terminal Value", f"${pv_terminal/1e9:.1f}B")
+                            tv_pct = (pv_terminal / dcf_enterprise_value * 100) if dcf_enterprise_value > 0 else 0
+                            st.caption(f"TV = ${terminal_ebitda/1e9:.2f}B EBITDA x {exit_multiple:.1f}x = **${terminal_value/1e9:.1f}B** | TV is **{tv_pct:.0f}%** of Enterprise Value")
 
                         # Show projected FCF table
                         fcf_df = pd.DataFrame({
@@ -4801,14 +4862,22 @@ with tab_valuation:
                         for gr in growth_rates:
                             row = {"Growth Rate": f"{gr*100:.1f}%"}
                             for dr in discount_rates:
-                                # Recalculate intrinsic value
                                 temp_fcf = []
                                 temp_f = free_cash_flow
                                 for _ in range(projection_years):
                                     temp_f = temp_f * (1 + gr)
                                     temp_fcf.append(temp_f)
                                 temp_pv = [f / ((1 + dr) ** (i + 1)) for i, f in enumerate(temp_fcf)]
-                                temp_terminal = temp_fcf[-1] * (1 + terminal_growth) / (dr - terminal_growth)
+                                if tv_method == "Perpetuity Growth Model":
+                                    if dr > terminal_growth:
+                                        temp_terminal = temp_fcf[-1] * (1 + terminal_growth) / (dr - terminal_growth)
+                                    else:
+                                        temp_terminal = 0
+                                else:
+                                    temp_ebitda_sens = ebitda if ebitda and ebitda > 0 else temp_fcf[-1] * 1.5
+                                    for _ in range(projection_years):
+                                        temp_ebitda_sens = temp_ebitda_sens * (1 + gr)
+                                    temp_terminal = temp_ebitda_sens * exit_multiple
                                 temp_pv_terminal = temp_terminal / ((1 + dr) ** projection_years)
                                 temp_ev = sum(temp_pv) + temp_pv_terminal
                                 temp_equity = temp_ev - net_debt
