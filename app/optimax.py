@@ -3502,14 +3502,74 @@ with tab_cash:
 
 with tab_calendar:
     st.subheader("Calendar & News")
-    st.caption("Dividend calendar, earnings dates, Fed events, and news for your holdings")
+    st.caption("Today's top finance news, economic events, and portfolio calendar")
 
-    if not st.session_state.holdings:
-        st.info("Add holdings in the Portfolio Manager tab to see calendar events and news.")
+    # ══════════════════════════════════════════════
+    # TODAY'S TOP FINANCE NEWS (always visible, no holdings needed)
+    # ══════════════════════════════════════════════
+    st.markdown("### Today's Finance News")
+    st.caption("Latest headlines from major markets and indices")
+
+    with st.spinner("Loading market news..."):
+        # Fetch news from major market tickers to get broad financial news
+        market_tickers = ["SPY", "QQQ", "DIA", "IWM", "^GSPC"]
+        market_news = []
+        seen_titles = set()
+        for mt in market_tickers:
+            try:
+                mt_news = get_stock_news(mt, limit=8)
+                for n in mt_news:
+                    # Deduplicate by title
+                    if n.title not in seen_titles:
+                        seen_titles.add(n.title)
+                        # Relabel symbol as source category
+                        source_map = {"SPY": "S&P 500", "QQQ": "Nasdaq", "DIA": "Dow Jones", "IWM": "Russell 2000", "^GSPC": "Markets"}
+                        n.symbol = source_map.get(mt, "Markets")
+                        market_news.append(n)
+            except Exception:
+                continue
+        market_news.sort(key=lambda x: x.published, reverse=True)
+
+    if market_news:
+        # Show today's date
+        st.markdown(f"**{datetime.now().strftime('%A, %B %d, %Y')}**")
+
+        for i, news in enumerate(market_news[:15]):
+            time_ago = datetime.now() - news.published
+            if time_ago.days > 0:
+                time_str = f"{time_ago.days}d ago"
+            elif time_ago.seconds > 3600:
+                time_str = f"{time_ago.seconds // 3600}h ago"
+            else:
+                time_str = f"{time_ago.seconds // 60}m ago"
+
+            # Color-code by market category
+            cat_colors = {"S&P 500": "#28a745", "Nasdaq": "#6C63FF", "Dow Jones": "#ff6b6b", "Russell 2000": "#ffa600", "Markets": "#4da6ff"}
+            badge_color = cat_colors.get(news.symbol, "#4da6ff")
+
+            st.markdown(
+                f"""
+                <div style='padding: 12px; margin: 8px 0; background-color: {CHART_FACE_COLOR}; border-radius: 8px; border-left: 4px solid {badge_color};'>
+                    <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;'>
+                        <span style='background-color: {badge_color}; padding: 3px 10px; border-radius: 4px; font-size: 0.85em; font-weight: bold; color: white;'>{news.symbol}</span>
+                        <span style='color: #888; font-size: 0.8em;'>{time_str} • {news.publisher}</span>
+                    </div>
+                    <a href='{news.link}' target='_blank' style='color: #4da6ff; text-decoration: none; font-weight: 500; font-size: 1.05em; display: block;'>
+                        {news.title} ↗
+                    </a>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
     else:
-        # ══════════════════════════════════════════════
-        # DIVIDEND & EARNINGS CALENDAR
-        # ══════════════════════════════════════════════
+        st.info("Could not load market news at this time.")
+
+    st.markdown("---")
+
+    # ══════════════════════════════════════════════
+    # PORTFOLIO CALENDAR (if holdings exist)
+    # ══════════════════════════════════════════════
+    if st.session_state.holdings:
         st.markdown("### Dividend & Earnings Calendar")
 
         # Legend
@@ -3842,10 +3902,10 @@ with tab_calendar:
         st.markdown("---")
 
         # ══════════════════════════════════════════════
-        # NEWS FEED
+        # PORTFOLIO NEWS
         # ══════════════════════════════════════════════
-        st.markdown("### News Feed")
-        st.caption("Recent headlines for your holdings - click any article to read more")
+        st.markdown("### Portfolio News")
+        st.caption("Recent headlines specific to your holdings")
 
         with st.spinner("Loading news..."):
             news_items = get_portfolio_news(st.session_state.holdings, limit_per_stock=3)
