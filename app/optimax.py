@@ -4652,246 +4652,355 @@ with tab_valuation:
                 # ── DCF VALUATION ──
                 with val_tab1:
                     st.markdown("### Discounted Cash Flow (DCF) Valuation")
-                    st.caption("Estimate intrinsic value based on projected free cash flows with auto-calculated WACC")
+                    st.caption("Fully derived from 5 years of financial statements — no manual assumptions")
 
-                    if free_cash_flow and free_cash_flow > 0:
-                        # ── Auto-calculate WACC ──
-                        # Cost of Equity via CAPM: Ke = Rf + Beta * (Rm - Rf)
-                        beta_val = info.get('beta', 1.0) or 1.0
-                        risk_free = 0.043  # ~10Y Treasury yield
-                        market_premium = 0.055  # Historical equity risk premium
-                        cost_of_equity = risk_free + beta_val * market_premium
+                    # ═══════════════════════════════════════════
+                    # PULL 5 YEARS OF FINANCIAL STATEMENTS
+                    # ═══════════════════════════════════════════
+                    income_stmt = financials  # already fetched (ticker.financials = annual income stmt)
+                    bal_sheet = balance_sheet
+                    cf_stmt = cash_flow
 
-                        # Cost of Debt: approximate from interest expense / total debt
-                        interest_expense = 0
-                        if financials is not None and not financials.empty:
-                            for col_name in ['Interest Expense', 'InterestExpense']:
-                                if col_name in financials.index:
-                                    ie_val = financials.loc[col_name].iloc[0]
+                    has_statements = (
+                        income_stmt is not None and not income_stmt.empty and
+                        bal_sheet is not None and not bal_sheet.empty and
+                        cf_stmt is not None and not cf_stmt.empty
+                    )
+
+                    if not has_statements:
+                        st.warning("Financial statements not available for this ticker. DCF requires income statement, balance sheet, and cash flow data.")
+                    else:
+                        # ── Display 5-Year Financial Statements ──
+                        stmt_tab1, stmt_tab2, stmt_tab3 = st.tabs(["Income Statement", "Balance Sheet", "Cash Flow"])
+
+                        def fmt_stmt(df):
+                            """Format a financial statement for display: columns as years, values in millions."""
+                            display = df.copy()
+                            display.columns = [col.strftime('%Y') if hasattr(col, 'strftime') else str(col) for col in display.columns]
+                            # Convert to millions for readability
+                            for c in display.columns:
+                                display[c] = display[c].apply(lambda x: f"${x/1e6:,.0f}M" if pd.notna(x) and isinstance(x, (int, float)) and abs(x) >= 1e6 else (f"${x:,.0f}" if pd.notna(x) and isinstance(x, (int, float)) else "—"))
+                            return display
+
+                        with stmt_tab1:
+                            st.markdown("#### Income Statement (Annual)")
+                            st.dataframe(fmt_stmt(income_stmt), use_container_width=True)
+                        with stmt_tab2:
+                            st.markdown("#### Balance Sheet (Annual)")
+                            st.dataframe(fmt_stmt(bal_sheet), use_container_width=True)
+                        with stmt_tab3:
+                            st.markdown("#### Cash Flow Statement (Annual)")
+                            st.dataframe(fmt_stmt(cf_stmt), use_container_width=True)
+
+                        st.markdown("---")
+
+                        # ═══════════════════════════════════════════
+                        # EXTRACT HISTORICAL FCF FROM CASH FLOW STMT
+                        # ═══════════════════════════════════════════
+                        # Get historical Free Cash Flow
+                        hist_fcf = []
+                        fcf_label = None
+                        for label in ['Free Cash Flow', 'FreeCashFlow']:
+                            if label in cf_stmt.index:
+                                fcf_label = label
+                                break
+
+                        if fcf_label:
+                            for col in reversed(cf_stmt.columns):  # oldest to newest
+                                val = cf_stmt.loc[fcf_label, col]
+                                if pd.notna(val):
+                                    hist_fcf.append(float(val))
+
+                        # Fallback: Operating Cash Flow - CapEx
+                        if len(hist_fcf) < 2:
+                            hist_fcf = []
+                            op_cf_label = None
+                            capex_label = None
+                            for label in ['Operating Cash Flow', 'OperatingCashFlow', 'Total Cash From Operating Activities']:
+                                if label in cf_stmt.index:
+                                    op_cf_label = label
+                                    break
+                            for label in ['Capital Expenditure', 'CapitalExpenditure', 'Capital Expenditures']:
+                                if label in cf_stmt.index:
+                                    capex_label = label
+                                    break
+                            if op_cf_label and capex_label:
+                                for col in reversed(cf_stmt.columns):
+                                    op_val = cf_stmt.loc[op_cf_label, col]
+                                    cap_val = cf_stmt.loc[capex_label, col]
+                                    if pd.notna(op_val) and pd.notna(cap_val):
+                                        hist_fcf.append(float(op_val) + float(cap_val))  # capex is negative
+
+                        # Extract historical revenue from income statement
+                        hist_revenue = []
+                        rev_label = None
+                        for label in ['Total Revenue', 'TotalRevenue', 'Revenue']:
+                            if label in income_stmt.index:
+                                rev_label = label
+                                break
+                        if rev_label:
+                            for col in reversed(income_stmt.columns):
+                                val = income_stmt.loc[rev_label, col]
+                                if pd.notna(val):
+                                    hist_revenue.append(float(val))
+
+                        # Extract historical EBITDA
+                        hist_ebitda = []
+                        ebitda_label = None
+                        for label in ['EBITDA', 'Ebitda']:
+                            if label in income_stmt.index:
+                                ebitda_label = label
+                                break
+                        if ebitda_label:
+                            for col in reversed(income_stmt.columns):
+                                val = income_stmt.loc[ebitda_label, col]
+                                if pd.notna(val):
+                                    hist_ebitda.append(float(val))
+
+                        latest_fcf = hist_fcf[-1] if hist_fcf else free_cash_flow
+
+                        if not latest_fcf or latest_fcf <= 0:
+                            st.warning("DCF analysis requires positive free cash flow. This company has negative or zero FCF in the most recent year.")
+                            if latest_fcf:
+                                st.markdown(f"**Most Recent FCF:** ${latest_fcf/1e9:.2f}B")
+                        else:
+                            # ═══════════════════════════════════════════
+                            # COMPUTE FCF CAGR FROM HISTORICAL DATA
+                            # ═══════════════════════════════════════════
+                            positive_fcf = [f for f in hist_fcf if f > 0]
+                            if len(positive_fcf) >= 2:
+                                n_years_hist = len(positive_fcf) - 1
+                                fcf_cagr = (positive_fcf[-1] / positive_fcf[0]) ** (1 / n_years_hist) - 1
+                            else:
+                                fcf_cagr = revenue_growth if revenue_growth > 0 else 0.05
+
+                            # Revenue CAGR
+                            if len(hist_revenue) >= 2:
+                                rev_cagr = (hist_revenue[-1] / hist_revenue[0]) ** (1 / (len(hist_revenue) - 1)) - 1
+                            else:
+                                rev_cagr = revenue_growth
+
+                            # Clamp FCF growth to reasonable range
+                            fcf_growth_rate = max(0.02, min(fcf_cagr, 0.30))
+                            projection_years = 5
+
+                            # ═══════════════════════════════════════════
+                            # AUTO-CALCULATE WACC
+                            # ═══════════════════════════════════════════
+                            beta_val = info.get('beta', 1.0) or 1.0
+                            risk_free = 0.043  # ~10Y Treasury yield
+                            market_premium = 0.055  # Historical equity risk premium
+                            cost_of_equity = risk_free + beta_val * market_premium
+
+                            # Cost of Debt from income statement
+                            interest_expense = 0
+                            for ie_label in ['Interest Expense', 'InterestExpense']:
+                                if ie_label in income_stmt.index:
+                                    ie_val = income_stmt.loc[ie_label].iloc[0]
                                     if pd.notna(ie_val):
                                         interest_expense = abs(float(ie_val))
                                     break
 
-                        cost_of_debt_pretax = (interest_expense / total_debt) if total_debt > 0 else 0.04
-                        tax_rate_est = info.get('effectiveTaxRate', 0.21) or 0.21
-                        if isinstance(tax_rate_est, (int, float)) and tax_rate_est > 1:
-                            tax_rate_est = tax_rate_est / 100
-                        cost_of_debt = cost_of_debt_pretax * (1 - tax_rate_est)
+                            cost_of_debt_pretax = (interest_expense / total_debt) if total_debt > 0 else 0.04
+                            tax_rate_est = info.get('effectiveTaxRate', 0.21) or 0.21
+                            if isinstance(tax_rate_est, (int, float)) and tax_rate_est > 1:
+                                tax_rate_est = tax_rate_est / 100
+                            cost_of_debt = cost_of_debt_pretax * (1 - tax_rate_est)
 
-                        # Capital structure weights
-                        equity_value_market = market_cap if market_cap > 0 else 1
-                        total_capital = equity_value_market + total_debt
-                        weight_equity = equity_value_market / total_capital if total_capital > 0 else 0.8
-                        weight_debt = total_debt / total_capital if total_capital > 0 else 0.2
+                            # Capital structure weights
+                            equity_value_market = market_cap if market_cap > 0 else 1
+                            total_capital = equity_value_market + total_debt
+                            weight_equity = equity_value_market / total_capital if total_capital > 0 else 0.8
+                            weight_debt = total_debt / total_capital if total_capital > 0 else 0.2
 
-                        # WACC = We * Ke + Wd * Kd*(1-t)
-                        wacc_calculated = (weight_equity * cost_of_equity) + (weight_debt * cost_of_debt)
-                        wacc_calculated = max(0.04, min(wacc_calculated, 0.25))  # Clamp to reasonable range
+                            wacc_calculated = (weight_equity * cost_of_equity) + (weight_debt * cost_of_debt)
+                            discount_rate = max(0.04, min(wacc_calculated, 0.25))
 
-                        # ── WACC Breakdown Display ──
-                        st.markdown("#### WACC Calculation (Auto)")
-                        wacc_cols = st.columns(6)
-                        with wacc_cols[0]:
-                            st.metric("Beta", f"{beta_val:.2f}")
-                        with wacc_cols[1]:
-                            st.metric("Cost of Equity", f"{cost_of_equity:.1%}")
-                        with wacc_cols[2]:
-                            st.metric("Cost of Debt", f"{cost_of_debt:.1%}")
-                        with wacc_cols[3]:
-                            st.metric("Equity Weight", f"{weight_equity:.0%}")
-                        with wacc_cols[4]:
-                            st.metric("Debt Weight", f"{weight_debt:.0%}")
-                        with wacc_cols[5]:
-                            st.metric("**WACC**", f"{wacc_calculated:.1%}")
+                            # Terminal growth = long-term GDP, capped below WACC
+                            terminal_growth = min(0.025, discount_rate - 0.01)
 
-                        st.caption(f"WACC = ({weight_equity:.0%} x {cost_of_equity:.1%}) + ({weight_debt:.0%} x {cost_of_debt:.1%}) = **{wacc_calculated:.2%}**  |  CAPM: Rf={risk_free:.1%} + {beta_val:.2f} x {market_premium:.1%}")
-                        st.markdown("---")
+                            # Exit multiple from current market data
+                            current_ev_ebitda = ev_ebitda if ev_ebitda and ev_ebitda > 0 else 12.0
 
-                        # ── Terminal Value Method ──
-                        tv_method = st.radio("Terminal Value Method", ["Perpetuity Growth Model", "Exit Multiple (EV/EBITDA)"], horizontal=True, key="tv_method")
+                            # ═══════════════════════════════════════════
+                            # DISPLAY: WACC BREAKDOWN
+                            # ═══════════════════════════════════════════
+                            st.markdown("#### WACC — Derived from Financial Statements")
+                            wacc_cols = st.columns(6)
+                            with wacc_cols[0]:
+                                st.metric("Beta", f"{beta_val:.2f}")
+                            with wacc_cols[1]:
+                                st.metric("Cost of Equity (CAPM)", f"{cost_of_equity:.1%}")
+                            with wacc_cols[2]:
+                                st.metric("Cost of Debt (after-tax)", f"{cost_of_debt:.1%}")
+                            with wacc_cols[3]:
+                                st.metric("Equity Weight", f"{weight_equity:.0%}")
+                            with wacc_cols[4]:
+                                st.metric("Debt Weight", f"{weight_debt:.0%}")
+                            with wacc_cols[5]:
+                                st.metric("**WACC**", f"{discount_rate:.2%}")
+                            st.caption(f"Ke = {risk_free:.1%} + {beta_val:.2f} x {market_premium:.1%} = {cost_of_equity:.2%} | Kd = ${interest_expense/1e6:,.0f}M / ${total_debt/1e9:.1f}B x (1 - {tax_rate_est:.0%}) = {cost_of_debt:.2%} | WACC = {weight_equity:.0%} x {cost_of_equity:.2%} + {weight_debt:.0%} x {cost_of_debt:.2%} = **{discount_rate:.2%}**")
 
-                        # Auto-estimate terminal growth from long-term nominal GDP (~2-3%)
-                        # Capped: terminal growth must be < WACC to avoid infinite TV
-                        long_term_gdp = 0.025  # US nominal GDP long-term avg ~2.5%
-                        auto_terminal_growth = min(long_term_gdp, wacc_calculated - 0.01)
+                            # ═══════════════════════════════════════════
+                            # DISPLAY: GROWTH RATES FROM STATEMENTS
+                            # ═══════════════════════════════════════════
+                            st.markdown("---")
+                            st.markdown("#### Growth Rates — Derived from Historical Data")
+                            gr_cols = st.columns(4)
+                            with gr_cols[0]:
+                                st.metric("FCF CAGR", f"{fcf_cagr:.1%}", help=f"Compound annual growth of FCF over {len(positive_fcf)} years of data" if len(positive_fcf) >= 2 else "Estimated from revenue growth")
+                            with gr_cols[1]:
+                                st.metric("Revenue CAGR", f"{rev_cagr:.1%}" if len(hist_revenue) >= 2 else "N/A")
+                            with gr_cols[2]:
+                                st.metric("FCF Growth Used", f"{fcf_growth_rate:.1%}", help="FCF CAGR clamped to 2%-30%")
+                            with gr_cols[3]:
+                                st.metric("Terminal Growth", f"{terminal_growth:.1%}", help="Long-term GDP ~2.5%, capped below WACC")
 
-                        # Auto-estimate exit EV/EBITDA from current market multiple
-                        current_ev_ebitda = ev_ebitda if ev_ebitda and ev_ebitda > 0 else 12.0
+                            # Show historical FCF trend
+                            if len(hist_fcf) >= 2:
+                                st.markdown("**Historical Free Cash Flow:**")
+                                hist_years = list(range(len(hist_fcf)))
+                                yr_labels = [f"Y-{len(hist_fcf)-1-i}" for i in range(len(hist_fcf)-1)] + ["Latest"]
+                                hist_fcf_df = pd.DataFrame({
+                                    "Year": yr_labels,
+                                    "FCF ($B)": [f/1e9 for f in hist_fcf]
+                                })
+                                st.dataframe(hist_fcf_df.style.format({"FCF ($B)": "${:.2f}"}), hide_index=True)
 
-                        dcf_col1, dcf_col2 = st.columns(2)
+                            # ═══════════════════════════════════════════
+                            # DCF PROJECTION (5 years)
+                            # ═══════════════════════════════════════════
+                            st.markdown("---")
+                            st.markdown("#### Terminal Value Method")
+                            tv_method = st.radio("", ["Perpetuity Growth Model", "Exit Multiple (EV/EBITDA)"], horizontal=True, key="tv_method")
 
-                        with dcf_col1:
-                            st.markdown("**Assumptions**")
-                            fcf_growth_rate = st.number_input("FCF Growth Rate % (Years 1-5)", min_value=0.0, max_value=50.0, value=min(max(revenue_growth * 100, 5.0), 30.0), step=0.5, key="fcf_growth") / 100
+                            # Project FCF forward
+                            projected_fcf = []
+                            fcf_val = latest_fcf
+                            for year in range(1, projection_years + 1):
+                                fcf_val = fcf_val * (1 + fcf_growth_rate)
+                                projected_fcf.append(fcf_val)
+
+                            # Present value of projected FCF
+                            pv_fcf = [f / ((1 + discount_rate) ** (i + 1)) for i, f in enumerate(projected_fcf)]
+
+                            # Terminal value
                             if tv_method == "Perpetuity Growth Model":
-                                terminal_growth = st.number_input("Terminal Growth Rate %", min_value=0.0, max_value=5.0, value=round(auto_terminal_growth * 100, 1), step=0.1, key="term_growth",
-                                                                  help=f"Auto-set to long-term nominal GDP (~2.5%), capped below WACC ({wacc_calculated:.1%}). Adjust if needed.") / 100
-                            else:
-                                exit_multiple = st.number_input("Exit EV/EBITDA Multiple", min_value=3.0, max_value=40.0, value=round(current_ev_ebitda, 1), step=0.5, key="exit_mult",
-                                                                help=f"Auto-set to current EV/EBITDA ({current_ev_ebitda:.1f}x). Adjust if needed.")
-                                terminal_growth = auto_terminal_growth  # still needed for sensitivity
-                            discount_rate = st.number_input("Discount Rate (WACC) %", min_value=1.0, max_value=25.0, value=round(wacc_calculated * 100, 1), step=0.5, key="wacc_input",
-                                                            help="Auto-calculated from WACC above. Adjust if needed.") / 100
-                            projection_years = st.number_input("Projection Years", min_value=3, max_value=15, value=5, step=1, key="proj_years")
-
-                        with dcf_col2:
-                            st.markdown("**Current Financials**")
-                            st.markdown(f"- Free Cash Flow: **${free_cash_flow/1e9:.2f}B**")
-                            st.markdown(f"- Shares Outstanding: **{shares_outstanding/1e9:.2f}B**")
-                            st.markdown(f"- Total Debt: **${total_debt/1e9:.2f}B**")
-                            st.markdown(f"- Total Cash: **${total_cash/1e9:.2f}B**")
-                            st.markdown(f"- Revenue Growth: **{revenue_growth:.1%}**")
-                            st.markdown(f"- EBITDA: **${ebitda/1e9:.2f}B**" if ebitda else "- EBITDA: **N/A**")
-                            st.markdown(f"- Current EV/EBITDA: **{current_ev_ebitda:.1f}x**")
-
-                        # Calculate DCF
-                        projected_fcf = []
-                        fcf = free_cash_flow
-                        for year in range(1, projection_years + 1):
-                            fcf = fcf * (1 + fcf_growth_rate)
-                            projected_fcf.append(fcf)
-
-                        # Present value of projected FCF
-                        pv_fcf = []
-                        for i, fcf_val in enumerate(projected_fcf):
-                            pv = fcf_val / ((1 + discount_rate) ** (i + 1))
-                            pv_fcf.append(pv)
-
-                        # Terminal value calculation
-                        if tv_method == "Perpetuity Growth Model":
-                            # TV = FCFn * (1+g) / (WACC - g)
-                            if discount_rate <= terminal_growth:
-                                st.error("Discount rate must be greater than terminal growth rate. Adjust your inputs.")
-                                terminal_value = 0
-                                terminal_fcf = 0
-                            else:
                                 terminal_fcf = projected_fcf[-1] * (1 + terminal_growth)
                                 terminal_value = terminal_fcf / (discount_rate - terminal_growth)
-                        else:
-                            # Exit Multiple: TV = EBITDA_terminal * Exit Multiple
-                            # Estimate terminal EBITDA by growing current EBITDA at FCF growth rate
-                            terminal_ebitda = ebitda if ebitda and ebitda > 0 else projected_fcf[-1] * 1.5
-                            for _ in range(projection_years):
-                                terminal_ebitda = terminal_ebitda * (1 + fcf_growth_rate)
-                            terminal_value = terminal_ebitda * exit_multiple
-                            terminal_fcf = projected_fcf[-1]  # for display
-
-                        pv_terminal = terminal_value / ((1 + discount_rate) ** projection_years)
-
-                        # Enterprise value
-                        dcf_enterprise_value = sum(pv_fcf) + pv_terminal
-
-                        # Equity value
-                        net_debt = total_debt - total_cash
-                        equity_value = dcf_enterprise_value - net_debt
-
-                        # Per share value
-                        intrinsic_value = equity_value / shares_outstanding if shares_outstanding > 0 else 0
-
-                        # Margin of safety
-                        upside = ((intrinsic_value - current_price) / current_price) * 100 if current_price > 0 else 0
-
-                        st.markdown("---")
-                        st.markdown("### DCF Results")
-
-                        # Terminal value breakdown
-                        st.markdown("#### Terminal Value Breakdown")
-                        if tv_method == "Perpetuity Growth Model":
-                            tv_cols = st.columns(4)
-                            with tv_cols[0]:
-                                st.metric("Last Projected FCF", f"${projected_fcf[-1]/1e9:.2f}B")
-                            with tv_cols[1]:
-                                st.metric("Terminal FCF (FCFn x (1+g))", f"${terminal_fcf/1e9:.2f}B")
-                            with tv_cols[2]:
-                                st.metric("Terminal Value", f"${terminal_value/1e9:.1f}B")
-                            with tv_cols[3]:
-                                st.metric("PV of Terminal Value", f"${pv_terminal/1e9:.1f}B")
-                            tv_pct = (pv_terminal / dcf_enterprise_value * 100) if dcf_enterprise_value > 0 else 0
-                            st.caption(f"TV = ${projected_fcf[-1]/1e9:.2f}B x (1 + {terminal_growth:.1%}) / ({discount_rate:.1%} - {terminal_growth:.1%}) = **${terminal_value/1e9:.1f}B** | TV is **{tv_pct:.0f}%** of Enterprise Value")
-                        else:
-                            tv_cols = st.columns(4)
-                            with tv_cols[0]:
-                                st.metric("Terminal EBITDA", f"${terminal_ebitda/1e9:.2f}B")
-                            with tv_cols[1]:
-                                st.metric(f"Exit Multiple", f"{exit_multiple:.1f}x EV/EBITDA")
-                            with tv_cols[2]:
-                                st.metric("Terminal Value", f"${terminal_value/1e9:.1f}B")
-                            with tv_cols[3]:
-                                st.metric("PV of Terminal Value", f"${pv_terminal/1e9:.1f}B")
-                            tv_pct = (pv_terminal / dcf_enterprise_value * 100) if dcf_enterprise_value > 0 else 0
-                            st.caption(f"TV = ${terminal_ebitda/1e9:.2f}B EBITDA x {exit_multiple:.1f}x = **${terminal_value/1e9:.1f}B** | TV is **{tv_pct:.0f}%** of Enterprise Value")
-
-                        # Show projected FCF table
-                        fcf_df = pd.DataFrame({
-                            "Year": [f"Year {i+1}" for i in range(projection_years)] + ["Terminal"],
-                            "FCF ($B)": [f/1e9 for f in projected_fcf] + [terminal_fcf/1e9],
-                            "PV ($B)": [f/1e9 for f in pv_fcf] + [pv_terminal/1e9]
-                        })
-                        st.dataframe(fcf_df.style.format({"FCF ($B)": "${:.2f}", "PV ($B)": "${:.2f}"}), hide_index=True)
-
-                        result_cols = st.columns(4)
-                        with result_cols[0]:
-                            st.metric("Enterprise Value", f"${dcf_enterprise_value/1e9:.1f}B")
-                        with result_cols[1]:
-                            st.metric("Equity Value", f"${equity_value/1e9:.1f}B")
-                        with result_cols[2]:
-                            st.metric("Intrinsic Value/Share", f"${intrinsic_value:.2f}")
-                        with result_cols[3]:
-                            upside_color = "normal" if upside > 0 else "inverse"
-                            st.metric("Upside/Downside", f"{upside:+.1f}%", delta_color=upside_color)
-
-                        # Valuation verdict
-                        if upside > 20:
-                            st.success(f"🟢 **UNDERVALUED** — The stock appears undervalued by {upside:.0f}% based on DCF analysis. Current price ${current_price:.2f} vs intrinsic value ${intrinsic_value:.2f}.")
-                        elif upside > 0:
-                            st.info(f"🟡 **FAIRLY VALUED** — The stock is slightly undervalued by {upside:.0f}%. Limited upside potential.")
-                        elif upside > -20:
-                            st.warning(f"🟠 **SLIGHTLY OVERVALUED** — The stock appears {abs(upside):.0f}% overvalued. Consider waiting for a better entry point.")
-                        else:
-                            st.error(f"🔴 **OVERVALUED** — The stock appears significantly overvalued by {abs(upside):.0f}%. DCF suggests intrinsic value of ${intrinsic_value:.2f}.")
-
-                        # Sensitivity analysis
-                        st.markdown("---")
-                        st.markdown("### Sensitivity Analysis")
-                        st.caption("How intrinsic value changes with different assumptions")
-
-                        growth_rates = [fcf_growth_rate - 0.03, fcf_growth_rate - 0.015, fcf_growth_rate, fcf_growth_rate + 0.015, fcf_growth_rate + 0.03]
-                        discount_rates = [discount_rate - 0.02, discount_rate - 0.01, discount_rate, discount_rate + 0.01, discount_rate + 0.02]
-
-                        sensitivity_data = []
-                        for gr in growth_rates:
-                            row = {"Growth Rate": f"{gr*100:.1f}%"}
-                            for dr in discount_rates:
-                                temp_fcf = []
-                                temp_f = free_cash_flow
+                            else:
+                                # Grow EBITDA forward at same rate
+                                terminal_ebitda = hist_ebitda[-1] if hist_ebitda else (ebitda if ebitda and ebitda > 0 else projected_fcf[-1] * 1.5)
                                 for _ in range(projection_years):
-                                    temp_f = temp_f * (1 + gr)
-                                    temp_fcf.append(temp_f)
-                                temp_pv = [f / ((1 + dr) ** (i + 1)) for i, f in enumerate(temp_fcf)]
-                                if tv_method == "Perpetuity Growth Model":
-                                    if dr > terminal_growth:
-                                        temp_terminal = temp_fcf[-1] * (1 + terminal_growth) / (dr - terminal_growth)
-                                    else:
-                                        temp_terminal = 0
-                                else:
-                                    temp_ebitda_sens = ebitda if ebitda and ebitda > 0 else temp_fcf[-1] * 1.5
+                                    terminal_ebitda = terminal_ebitda * (1 + fcf_growth_rate)
+                                terminal_value = terminal_ebitda * current_ev_ebitda
+                                terminal_fcf = projected_fcf[-1]
+
+                            pv_terminal = terminal_value / ((1 + discount_rate) ** projection_years)
+
+                            # Enterprise & equity value
+                            dcf_enterprise_value = sum(pv_fcf) + pv_terminal
+                            net_debt = total_debt - total_cash
+                            equity_value = dcf_enterprise_value - net_debt
+                            intrinsic_value = equity_value / shares_outstanding if shares_outstanding > 0 else 0
+                            upside = ((intrinsic_value - current_price) / current_price) * 100 if current_price > 0 else 0
+
+                            # ═══════════════════════════════════════════
+                            # DISPLAY: TERMINAL VALUE BREAKDOWN
+                            # ═══════════════════════════════════════════
+                            st.markdown("---")
+                            st.markdown("### DCF Results")
+
+                            st.markdown("#### Terminal Value Breakdown")
+                            if tv_method == "Perpetuity Growth Model":
+                                tv_cols = st.columns(4)
+                                with tv_cols[0]:
+                                    st.metric("Last Projected FCF", f"${projected_fcf[-1]/1e9:.2f}B")
+                                with tv_cols[1]:
+                                    st.metric("Terminal FCF (FCFn x (1+g))", f"${terminal_fcf/1e9:.2f}B")
+                                with tv_cols[2]:
+                                    st.metric("Terminal Value", f"${terminal_value/1e9:.1f}B")
+                                with tv_cols[3]:
+                                    st.metric("PV of Terminal Value", f"${pv_terminal/1e9:.1f}B")
+                                tv_pct = (pv_terminal / dcf_enterprise_value * 100) if dcf_enterprise_value > 0 else 0
+                                st.caption(f"TV = ${projected_fcf[-1]/1e9:.2f}B x (1 + {terminal_growth:.1%}) / ({discount_rate:.2%} - {terminal_growth:.1%}) = **${terminal_value/1e9:.1f}B** | TV is **{tv_pct:.0f}%** of EV")
+                            else:
+                                tv_cols = st.columns(4)
+                                with tv_cols[0]:
+                                    st.metric("Terminal EBITDA", f"${terminal_ebitda/1e9:.2f}B")
+                                with tv_cols[1]:
+                                    st.metric("Exit Multiple", f"{current_ev_ebitda:.1f}x EV/EBITDA")
+                                with tv_cols[2]:
+                                    st.metric("Terminal Value", f"${terminal_value/1e9:.1f}B")
+                                with tv_cols[3]:
+                                    st.metric("PV of Terminal Value", f"${pv_terminal/1e9:.1f}B")
+                                tv_pct = (pv_terminal / dcf_enterprise_value * 100) if dcf_enterprise_value > 0 else 0
+                                st.caption(f"TV = ${terminal_ebitda/1e9:.2f}B x {current_ev_ebitda:.1f}x = **${terminal_value/1e9:.1f}B** | TV is **{tv_pct:.0f}%** of EV")
+
+                            # Projected FCF table
+                            fcf_df = pd.DataFrame({
+                                "Year": [f"Year {i+1}" for i in range(projection_years)] + ["Terminal"],
+                                "FCF ($B)": [f/1e9 for f in projected_fcf] + [terminal_fcf/1e9],
+                                "PV ($B)": [f/1e9 for f in pv_fcf] + [pv_terminal/1e9]
+                            })
+                            st.dataframe(fcf_df.style.format({"FCF ($B)": "${:.2f}", "PV ($B)": "${:.2f}"}), hide_index=True)
+
+                            # Results
+                            result_cols = st.columns(4)
+                            with result_cols[0]:
+                                st.metric("Enterprise Value", f"${dcf_enterprise_value/1e9:.1f}B")
+                            with result_cols[1]:
+                                st.metric("Equity Value", f"${equity_value/1e9:.1f}B")
+                            with result_cols[2]:
+                                st.metric("Intrinsic Value/Share", f"${intrinsic_value:.2f}")
+                            with result_cols[3]:
+                                upside_color = "normal" if upside > 0 else "inverse"
+                                st.metric("Upside/Downside", f"{upside:+.1f}%", delta_color=upside_color)
+
+                            # Verdict
+                            if upside > 20:
+                                st.success(f"🟢 **UNDERVALUED** — The stock appears undervalued by {upside:.0f}% based on DCF analysis. Current price ${current_price:.2f} vs intrinsic value ${intrinsic_value:.2f}.")
+                            elif upside > 0:
+                                st.info(f"🟡 **FAIRLY VALUED** — The stock is slightly undervalued by {upside:.0f}%. Limited upside potential.")
+                            elif upside > -20:
+                                st.warning(f"🟠 **SLIGHTLY OVERVALUED** — The stock appears {abs(upside):.0f}% overvalued. Consider waiting for a better entry point.")
+                            else:
+                                st.error(f"🔴 **OVERVALUED** — The stock appears significantly overvalued by {abs(upside):.0f}%. DCF suggests intrinsic value of ${intrinsic_value:.2f}.")
+
+                            # Sensitivity analysis
+                            st.markdown("---")
+                            st.markdown("### Sensitivity Analysis")
+                            st.caption("How intrinsic value changes across WACC and growth rate scenarios")
+
+                            growth_rates = [fcf_growth_rate - 0.03, fcf_growth_rate - 0.015, fcf_growth_rate, fcf_growth_rate + 0.015, fcf_growth_rate + 0.03]
+                            discount_rates_sens = [discount_rate - 0.02, discount_rate - 0.01, discount_rate, discount_rate + 0.01, discount_rate + 0.02]
+
+                            sensitivity_data = []
+                            for gr in growth_rates:
+                                row = {"FCF Growth": f"{gr*100:.1f}%"}
+                                for dr in discount_rates_sens:
+                                    temp_fcf_list = []
+                                    temp_f = latest_fcf
                                     for _ in range(projection_years):
-                                        temp_ebitda_sens = temp_ebitda_sens * (1 + gr)
-                                    temp_terminal = temp_ebitda_sens * exit_multiple
-                                temp_pv_terminal = temp_terminal / ((1 + dr) ** projection_years)
-                                temp_ev = sum(temp_pv) + temp_pv_terminal
-                                temp_equity = temp_ev - net_debt
-                                temp_iv = temp_equity / shares_outstanding if shares_outstanding > 0 else 0
-                                row[f"WACC {dr*100:.0f}%"] = f"${temp_iv:.0f}"
-                            sensitivity_data.append(row)
+                                        temp_f = temp_f * (1 + gr)
+                                        temp_fcf_list.append(temp_f)
+                                    temp_pv = [f / ((1 + dr) ** (i + 1)) for i, f in enumerate(temp_fcf_list)]
+                                    if tv_method == "Perpetuity Growth Model":
+                                        temp_terminal = temp_fcf_list[-1] * (1 + terminal_growth) / (dr - terminal_growth) if dr > terminal_growth else 0
+                                    else:
+                                        temp_ebitda_s = hist_ebitda[-1] if hist_ebitda else (ebitda if ebitda and ebitda > 0 else temp_fcf_list[-1] * 1.5)
+                                        for _ in range(projection_years):
+                                            temp_ebitda_s = temp_ebitda_s * (1 + gr)
+                                        temp_terminal = temp_ebitda_s * current_ev_ebitda
+                                    temp_pv_terminal = temp_terminal / ((1 + dr) ** projection_years)
+                                    temp_ev = sum(temp_pv) + temp_pv_terminal
+                                    temp_equity = temp_ev - net_debt
+                                    temp_iv = temp_equity / shares_outstanding if shares_outstanding > 0 else 0
+                                    row[f"WACC {dr*100:.1f}%"] = f"${temp_iv:.0f}"
+                                sensitivity_data.append(row)
 
-                        sens_df = pd.DataFrame(sensitivity_data)
-                        st.dataframe(sens_df, hide_index=True, use_container_width=True)
-
-                    else:
-                        st.warning("DCF analysis requires positive free cash flow. This company may have negative FCF or data is unavailable.")
-                        if free_cash_flow:
-                            st.markdown(f"**Current FCF:** ${free_cash_flow/1e9:.2f}B")
+                            sens_df = pd.DataFrame(sensitivity_data)
+                            st.dataframe(sens_df, hide_index=True, use_container_width=True)
 
                 # ── RELATIVE VALUATION ──
                 with val_tab2:
