@@ -4652,16 +4652,69 @@ with tab_valuation:
                 # ── DCF VALUATION ──
                 with val_tab1:
                     st.markdown("### Discounted Cash Flow (DCF) Valuation")
-                    st.caption("Estimate intrinsic value based on projected free cash flows")
+                    st.caption("Estimate intrinsic value based on projected free cash flows with auto-calculated WACC")
 
                     if free_cash_flow and free_cash_flow > 0:
+                        # ── Auto-calculate WACC ──
+                        # Cost of Equity via CAPM: Ke = Rf + Beta * (Rm - Rf)
+                        beta_val = info.get('beta', 1.0) or 1.0
+                        risk_free = 0.043  # ~10Y Treasury yield
+                        market_premium = 0.055  # Historical equity risk premium
+                        cost_of_equity = risk_free + beta_val * market_premium
+
+                        # Cost of Debt: approximate from interest expense / total debt
+                        interest_expense = 0
+                        if financials is not None and not financials.empty:
+                            for col_name in ['Interest Expense', 'InterestExpense']:
+                                if col_name in financials.index:
+                                    ie_val = financials.loc[col_name].iloc[0]
+                                    if pd.notna(ie_val):
+                                        interest_expense = abs(float(ie_val))
+                                    break
+
+                        cost_of_debt_pretax = (interest_expense / total_debt) if total_debt > 0 else 0.04
+                        tax_rate_est = info.get('effectiveTaxRate', 0.21) or 0.21
+                        if isinstance(tax_rate_est, (int, float)) and tax_rate_est > 1:
+                            tax_rate_est = tax_rate_est / 100
+                        cost_of_debt = cost_of_debt_pretax * (1 - tax_rate_est)
+
+                        # Capital structure weights
+                        equity_value_market = market_cap if market_cap > 0 else 1
+                        total_capital = equity_value_market + total_debt
+                        weight_equity = equity_value_market / total_capital if total_capital > 0 else 0.8
+                        weight_debt = total_debt / total_capital if total_capital > 0 else 0.2
+
+                        # WACC = We * Ke + Wd * Kd*(1-t)
+                        wacc_calculated = (weight_equity * cost_of_equity) + (weight_debt * cost_of_debt)
+                        wacc_calculated = max(0.04, min(wacc_calculated, 0.25))  # Clamp to reasonable range
+
+                        # ── WACC Breakdown Display ──
+                        st.markdown("#### WACC Calculation (Auto)")
+                        wacc_cols = st.columns(6)
+                        with wacc_cols[0]:
+                            st.metric("Beta", f"{beta_val:.2f}")
+                        with wacc_cols[1]:
+                            st.metric("Cost of Equity", f"{cost_of_equity:.1%}")
+                        with wacc_cols[2]:
+                            st.metric("Cost of Debt", f"{cost_of_debt:.1%}")
+                        with wacc_cols[3]:
+                            st.metric("Equity Weight", f"{weight_equity:.0%}")
+                        with wacc_cols[4]:
+                            st.metric("Debt Weight", f"{weight_debt:.0%}")
+                        with wacc_cols[5]:
+                            st.metric("**WACC**", f"{wacc_calculated:.1%}")
+
+                        st.caption(f"WACC = ({weight_equity:.0%} x {cost_of_equity:.1%}) + ({weight_debt:.0%} x {cost_of_debt:.1%}) = **{wacc_calculated:.2%}**  |  CAPM: Rf={risk_free:.1%} + {beta_val:.2f} x {market_premium:.1%}")
+                        st.markdown("---")
+
                         dcf_col1, dcf_col2 = st.columns(2)
 
                         with dcf_col1:
                             st.markdown("**Assumptions**")
-                            fcf_growth_rate = st.number_input("FCF Growth Rate % (Years 1-5)", min_value=0.0, max_value=50.0, value=10.0, step=0.5, key="fcf_growth") / 100
+                            fcf_growth_rate = st.number_input("FCF Growth Rate % (Years 1-5)", min_value=0.0, max_value=50.0, value=min(max(revenue_growth * 100, 5.0), 30.0), step=0.5, key="fcf_growth") / 100
                             terminal_growth = st.number_input("Terminal Growth Rate %", min_value=0.0, max_value=5.0, value=2.5, step=0.1, key="term_growth") / 100
-                            discount_rate = st.number_input("Discount Rate (WACC) %", min_value=1.0, max_value=25.0, value=10.0, step=0.5, key="wacc") / 100
+                            discount_rate = st.number_input("Discount Rate (WACC) %", min_value=1.0, max_value=25.0, value=round(wacc_calculated * 100, 1), step=0.5, key="wacc_input",
+                                                            help="Auto-calculated from WACC above. Adjust if needed.") / 100
                             projection_years = st.number_input("Projection Years", min_value=3, max_value=15, value=5, step=1, key="proj_years")
 
                         with dcf_col2:
@@ -4670,6 +4723,8 @@ with tab_valuation:
                             st.markdown(f"- Shares Outstanding: **{shares_outstanding/1e9:.2f}B**")
                             st.markdown(f"- Total Debt: **${total_debt/1e9:.2f}B**")
                             st.markdown(f"- Total Cash: **${total_cash/1e9:.2f}B**")
+                            st.markdown(f"- Revenue Growth: **{revenue_growth:.1%}**")
+                            st.markdown(f"- Effective Tax Rate: **{tax_rate_est:.1%}**")
 
                         # Calculate DCF
                         projected_fcf = []
