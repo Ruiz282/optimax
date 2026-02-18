@@ -5005,20 +5005,18 @@ with tab_valuation:
                 # ── RELATIVE VALUATION ──
                 with val_tab2:
                     st.markdown("### Relative Valuation")
-                    st.caption("Compare valuation multiples to peers and market averages")
+                    st.caption("All multiples and implied values derived from available market data — no targets or assumptions")
 
-                    # Current multiples
+                    # Current multiples from market data
                     st.markdown("#### Current Valuation Multiples")
                     mult_cols = st.columns(4)
 
                     with mult_cols[0]:
-                        st.metric("P/E (TTM)", f"{pe_ratio:.1f}x" if pe_ratio else "N/A",
-                                 delta="High" if pe_ratio and pe_ratio > 30 else "Low" if pe_ratio and pe_ratio < 15 else None)
+                        st.metric("P/E (TTM)", f"{pe_ratio:.1f}x" if pe_ratio else "N/A")
                         st.metric("Forward P/E", f"{forward_pe:.1f}x" if forward_pe else "N/A")
 
                     with mult_cols[1]:
-                        st.metric("PEG Ratio", f"{peg_ratio:.2f}" if peg_ratio else "N/A",
-                                 delta="Expensive" if peg_ratio and peg_ratio > 2 else "Cheap" if peg_ratio and peg_ratio < 1 else None)
+                        st.metric("PEG Ratio", f"{peg_ratio:.2f}" if peg_ratio else "N/A")
                         st.metric("P/B Ratio", f"{pb_ratio:.1f}x" if pb_ratio else "N/A")
 
                     with mult_cols[2]:
@@ -5026,84 +5024,84 @@ with tab_valuation:
                         st.metric("EV/Revenue", f"{ev_revenue:.1f}x" if ev_revenue else "N/A")
 
                     with mult_cols[3]:
-                        st.metric("EV/EBITDA", f"{ev_ebitda:.1f}x" if ev_ebitda else "N/A",
-                                 delta="High" if ev_ebitda and ev_ebitda > 20 else "Low" if ev_ebitda and ev_ebitda < 10 else None)
+                        st.metric("EV/EBITDA", f"{ev_ebitda:.1f}x" if ev_ebitda else "N/A")
+                        div_yield_val = info.get('trailingAnnualDividendYield', 0) or 0
+                        st.metric("Dividend Yield", f"{div_yield_val*100:.2f}%" if div_yield_val else "N/A")
 
                     st.markdown("---")
 
-                    # P/E Based Valuation
-                    st.markdown("#### P/E Based Valuation")
-                    pe_col1, pe_col2 = st.columns(2)
+                    # Implied valuations from actual data
+                    st.markdown("#### Implied Valuations from Current Data")
+                    st.caption("What the stock is worth based on each multiple applied to actual financials")
 
-                    with pe_col1:
-                        target_pe = st.number_input("Target P/E Multiple", 10.0, 50.0, 20.0, 1.0, key="target_pe")
+                    net_debt_rv = total_debt - total_cash
 
-                    with pe_col2:
-                        if trailing_eps and trailing_eps > 0:
-                            pe_fair_value = trailing_eps * target_pe
-                            pe_upside = ((pe_fair_value - current_price) / current_price) * 100
-                            st.metric("P/E Fair Value", f"${pe_fair_value:.2f}",
-                                     delta=f"{pe_upside:+.1f}% vs current",
-                                     delta_color="normal" if pe_upside > 0 else "inverse")
-                        else:
-                            st.warning("EPS data not available")
+                    valuation_rows = []
 
-                    # EV/EBITDA Based Valuation
-                    st.markdown("#### EV/EBITDA Based Valuation")
-                    ev_col1, ev_col2 = st.columns(2)
+                    # P/E implied: current P/E x EPS = current price (show Forward P/E implied)
+                    if forward_pe and forward_pe > 0 and forward_eps and forward_eps > 0:
+                        fwd_pe_implied = forward_eps * forward_pe
+                        valuation_rows.append({"Method": "Forward P/E", "Multiple": f"{forward_pe:.1f}x", "Basis": f"Fwd EPS ${forward_eps:.2f}", "Implied Price": f"${fwd_pe_implied:.2f}", "vs Current": f"{((fwd_pe_implied/current_price)-1)*100:+.1f}%"})
 
-                    with ev_col1:
-                        target_ev_ebitda = st.number_input("Target EV/EBITDA Multiple", 5.0, 30.0, 12.0, 0.5, key="target_ev")
+                    if pe_ratio and pe_ratio > 0 and trailing_eps and trailing_eps > 0:
+                        ttm_pe_implied = trailing_eps * pe_ratio
+                        valuation_rows.append({"Method": "Trailing P/E", "Multiple": f"{pe_ratio:.1f}x", "Basis": f"TTM EPS ${trailing_eps:.2f}", "Implied Price": f"${ttm_pe_implied:.2f}", "vs Current": f"{((ttm_pe_implied/current_price)-1)*100:+.1f}%"})
 
-                    with ev_col2:
-                        if ebitda and ebitda > 0:
-                            ev_fair = ebitda * target_ev_ebitda
-                            equity_fair = ev_fair - net_debt if 'net_debt' in dir() else ev_fair - (total_debt - total_cash)
-                            ev_fair_per_share = equity_fair / shares_outstanding if shares_outstanding > 0 else 0
-                            ev_upside = ((ev_fair_per_share - current_price) / current_price) * 100
-                            st.metric("EV/EBITDA Fair Value", f"${ev_fair_per_share:.2f}",
-                                     delta=f"{ev_upside:+.1f}% vs current",
-                                     delta_color="normal" if ev_upside > 0 else "inverse")
-                        else:
-                            st.warning("EBITDA data not available")
+                    # EV/EBITDA implied
+                    if ev_ebitda and ev_ebitda > 0 and ebitda and ebitda > 0:
+                        ev_implied = ebitda * ev_ebitda
+                        equity_implied = ev_implied - net_debt_rv
+                        ev_ebitda_price = equity_implied / shares_outstanding if shares_outstanding > 0 else 0
+                        valuation_rows.append({"Method": "EV/EBITDA", "Multiple": f"{ev_ebitda:.1f}x", "Basis": f"EBITDA ${ebitda/1e9:.2f}B", "Implied Price": f"${ev_ebitda_price:.2f}", "vs Current": f"{((ev_ebitda_price/current_price)-1)*100:+.1f}%"})
 
-                    # Sector comparison placeholder
-                    st.markdown("---")
-                    st.markdown("#### Sector Comparison")
-                    sector_averages = {
-                        "Technology": {"P/E": 28, "EV/EBITDA": 18, "P/S": 6},
-                        "Healthcare": {"P/E": 22, "EV/EBITDA": 14, "P/S": 4},
-                        "Financial Services": {"P/E": 12, "EV/EBITDA": 8, "P/S": 2},
-                        "Consumer Cyclical": {"P/E": 20, "EV/EBITDA": 12, "P/S": 1.5},
-                        "Consumer Defensive": {"P/E": 24, "EV/EBITDA": 14, "P/S": 2},
-                        "Energy": {"P/E": 10, "EV/EBITDA": 6, "P/S": 1},
-                        "Industrials": {"P/E": 18, "EV/EBITDA": 10, "P/S": 1.5},
-                        "Communication Services": {"P/E": 20, "EV/EBITDA": 10, "P/S": 3},
-                    }
+                    # EV/Revenue implied
+                    if ev_revenue and ev_revenue > 0 and total_revenue and total_revenue > 0:
+                        ev_rev_implied = total_revenue * ev_revenue
+                        equity_rev_implied = ev_rev_implied - net_debt_rv
+                        ev_rev_price = equity_rev_implied / shares_outstanding if shares_outstanding > 0 else 0
+                        valuation_rows.append({"Method": "EV/Revenue", "Multiple": f"{ev_revenue:.1f}x", "Basis": f"Revenue ${total_revenue/1e9:.2f}B", "Implied Price": f"${ev_rev_price:.2f}", "vs Current": f"{((ev_rev_price/current_price)-1)*100:+.1f}%"})
 
-                    if sector in sector_averages:
-                        sector_avg = sector_averages[sector]
-                        comp_cols = st.columns(3)
-                        with comp_cols[0]:
-                            pe_diff = ((pe_ratio / sector_avg["P/E"]) - 1) * 100 if pe_ratio and sector_avg["P/E"] else 0
-                            st.metric(f"P/E vs {sector} Avg",
-                                     f"{pe_ratio:.1f}x vs {sector_avg['P/E']}x",
-                                     delta=f"{pe_diff:+.0f}%",
-                                     delta_color="inverse" if pe_diff > 20 else "normal")
-                        with comp_cols[1]:
-                            ev_diff = ((ev_ebitda / sector_avg["EV/EBITDA"]) - 1) * 100 if ev_ebitda and sector_avg["EV/EBITDA"] else 0
-                            st.metric(f"EV/EBITDA vs {sector} Avg",
-                                     f"{ev_ebitda:.1f}x vs {sector_avg['EV/EBITDA']}x",
-                                     delta=f"{ev_diff:+.0f}%",
-                                     delta_color="inverse" if ev_diff > 20 else "normal")
-                        with comp_cols[2]:
-                            ps_diff = ((ps_ratio / sector_avg["P/S"]) - 1) * 100 if ps_ratio and sector_avg["P/S"] else 0
-                            st.metric(f"P/S vs {sector} Avg",
-                                     f"{ps_ratio:.1f}x vs {sector_avg['P/S']}x",
-                                     delta=f"{ps_diff:+.0f}%",
-                                     delta_color="inverse" if ps_diff > 20 else "normal")
+                    # P/B implied
+                    book_value_per_share = info.get('bookValue', 0) or 0
+                    if pb_ratio and pb_ratio > 0 and book_value_per_share and book_value_per_share > 0:
+                        pb_implied = book_value_per_share * pb_ratio
+                        valuation_rows.append({"Method": "P/B Ratio", "Multiple": f"{pb_ratio:.1f}x", "Basis": f"Book Value ${book_value_per_share:.2f}", "Implied Price": f"${pb_implied:.2f}", "vs Current": f"{((pb_implied/current_price)-1)*100:+.1f}%"})
+
+                    # P/S implied
+                    if ps_ratio and ps_ratio > 0 and total_revenue and total_revenue > 0 and shares_outstanding > 0:
+                        rev_per_share = total_revenue / shares_outstanding
+                        ps_implied = rev_per_share * ps_ratio
+                        valuation_rows.append({"Method": "P/S Ratio", "Multiple": f"{ps_ratio:.1f}x", "Basis": f"Rev/Share ${rev_per_share:.2f}", "Implied Price": f"${ps_implied:.2f}", "vs Current": f"{((ps_implied/current_price)-1)*100:+.1f}%"})
+
+                    if valuation_rows:
+                        val_df = pd.DataFrame(valuation_rows)
+                        st.dataframe(val_df, hide_index=True, use_container_width=True)
+
+                        # Composite implied value (average of all methods)
+                        implied_prices = []
+                        for row in valuation_rows:
+                            price_str = row["Implied Price"].replace("$", "").replace(",", "")
+                            try:
+                                implied_prices.append(float(price_str))
+                            except ValueError:
+                                pass
+                        if implied_prices:
+                            avg_implied = sum(implied_prices) / len(implied_prices)
+                            avg_upside = ((avg_implied - current_price) / current_price) * 100
+
+                            st.markdown("---")
+                            st.markdown("#### Composite Valuation")
+                            comp_cols = st.columns(3)
+                            with comp_cols[0]:
+                                st.metric("Average Implied Price", f"${avg_implied:.2f}")
+                            with comp_cols[1]:
+                                st.metric("Current Price", f"${current_price:.2f}")
+                            with comp_cols[2]:
+                                st.metric("Avg Upside/Downside", f"{avg_upside:+.1f}%",
+                                         delta_color="normal" if avg_upside > 0 else "inverse")
+                            st.caption(f"Average of {len(implied_prices)} valuation methods based on actual market multiples")
                     else:
-                        st.info(f"Sector averages not available for {sector}")
+                        st.warning("Insufficient data to compute relative valuations.")
 
                 # ── FUNDAMENTAL ANALYSIS ──
                 with val_tab3:
