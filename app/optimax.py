@@ -4634,7 +4634,21 @@ with tab_valuation:
             loading_placeholder.empty()
 
             if not info.get('currentPrice'):
-                st.error(f"Could not find data for {val_symbol}")
+                # Suggest common corrections
+                common_typos = {"APPL": "AAPL", "GOGL": "GOOGL", "AMZN ": "AMZN", "TSLA ": "TSLA", "MSFT ": "MSFT"}
+                suggestion = common_typos.get(val_symbol, "")
+                # Also try search_tickers for a suggestion
+                if not suggestion:
+                    try:
+                        matches = search_tickers(val_symbol)
+                        if matches:
+                            suggestion = matches[0]["symbol"]
+                    except Exception:
+                        pass
+                if suggestion:
+                    st.error(f"Could not find data for **{val_symbol}**. Did you mean **{suggestion}**?")
+                else:
+                    st.error(f"Could not find data for **{val_symbol}**. Check the ticker symbol and try again.")
             else:
                 # Extract key data
                 current_price = info.get('currentPrice', 0)
