@@ -4626,6 +4626,10 @@ with tab_valuation:
             financials = ticker.financials
             balance_sheet = ticker.balance_sheet
             cash_flow = ticker.cashflow
+            # Quarterly statements
+            quarterly_financials = ticker.quarterly_financials
+            quarterly_balance_sheet = ticker.quarterly_balance_sheet
+            quarterly_cashflow = ticker.quarterly_cashflow
 
             loading_placeholder.empty()
 
@@ -4702,58 +4706,85 @@ with tab_valuation:
                 # ═══════════════════════════════════════════
                 # VALUATION METHODS
                 # ═══════════════════════════════════════════
-                val_tab1, val_tab2, val_tab3, val_tab4 = st.tabs([
+                val_tab0, val_tab1, val_tab2, val_tab3, val_tab4 = st.tabs([
+                    "📄 Financial Statements",
                     "📊 DCF Valuation",
                     "📈 Relative Valuation",
                     "📉 Fundamental Analysis",
                     "💰 Financial Health"
                 ])
 
-                # ── DCF VALUATION ──
-                with val_tab1:
-                    st.markdown("### Discounted Cash Flow (DCF) Valuation")
-                    st.caption("Fully derived from 5 years of financial statements — no manual assumptions")
-
-                    # ═══════════════════════════════════════════
-                    # PULL 5 YEARS OF FINANCIAL STATEMENTS
-                    # ═══════════════════════════════════════════
-                    income_stmt = financials  # already fetched (ticker.financials = annual income stmt)
-                    bal_sheet = balance_sheet
-                    cf_stmt = cash_flow
+                # ── FINANCIAL STATEMENTS (10-K / Yahoo Finance style) ──
+                with val_tab0:
+                    st.markdown("### Financial Statements")
+                    st.caption(f"Annual and quarterly data from {company_name}'s SEC filings via Yahoo Finance")
 
                     has_statements = (
-                        income_stmt is not None and not income_stmt.empty and
-                        bal_sheet is not None and not bal_sheet.empty and
-                        cf_stmt is not None and not cf_stmt.empty
+                        financials is not None and not financials.empty and
+                        balance_sheet is not None and not balance_sheet.empty and
+                        cash_flow is not None and not cash_flow.empty
                     )
 
                     if not has_statements:
-                        st.warning("Financial statements not available for this ticker. DCF requires income statement, balance sheet, and cash flow data.")
+                        st.warning("Financial statements not available for this ticker.")
                     else:
-                        # ── Display 5-Year Financial Statements ──
-                        stmt_tab1, stmt_tab2, stmt_tab3 = st.tabs(["Income Statement", "Balance Sheet", "Cash Flow"])
-
                         def fmt_stmt(df):
-                            """Format a financial statement for display: columns as years, values in millions."""
+                            """Format a financial statement: columns as year labels, values in readable format."""
                             display = df.copy()
-                            display.columns = [col.strftime('%Y') if hasattr(col, 'strftime') else str(col) for col in display.columns]
-                            # Convert to millions for readability
+                            display.columns = [col.strftime('%b %Y') if hasattr(col, 'strftime') else str(col) for col in display.columns]
                             for c in display.columns:
-                                display[c] = display[c].apply(lambda x: f"${x/1e6:,.0f}M" if pd.notna(x) and isinstance(x, (int, float)) and abs(x) >= 1e6 else (f"${x:,.0f}" if pd.notna(x) and isinstance(x, (int, float)) else "—"))
+                                display[c] = display[c].apply(
+                                    lambda x: f"${x/1e9:,.2f}B" if pd.notna(x) and isinstance(x, (int, float)) and abs(x) >= 1e9
+                                    else (f"${x/1e6:,.0f}M" if pd.notna(x) and isinstance(x, (int, float)) and abs(x) >= 1e6
+                                    else (f"${x:,.0f}" if pd.notna(x) and isinstance(x, (int, float)) and abs(x) >= 1
+                                    else ("—" if not pd.notna(x) else f"{x}")))
+                            )
+                            # Clean up index names (CamelCase to spaced)
+                            import re
+                            display.index = [re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', str(idx)) for idx in display.index]
                             return display
 
-                        with stmt_tab1:
-                            st.markdown("#### Income Statement (Annual)")
-                            st.dataframe(fmt_stmt(income_stmt), use_container_width=True)
-                        with stmt_tab2:
-                            st.markdown("#### Balance Sheet (Annual)")
-                            st.dataframe(fmt_stmt(bal_sheet), use_container_width=True)
-                        with stmt_tab3:
-                            st.markdown("#### Cash Flow Statement (Annual)")
-                            st.dataframe(fmt_stmt(cf_stmt), use_container_width=True)
+                        period_toggle = st.radio("Period", ["Annual", "Quarterly"], horizontal=True, key="stmt_period")
 
-                        st.markdown("---")
+                        stmt_tab_is, stmt_tab_bs, stmt_tab_cf = st.tabs(["Income Statement (P&L)", "Balance Sheet", "Cash Flow Statement"])
 
+                        with stmt_tab_is:
+                            is_data = financials if period_toggle == "Annual" else quarterly_financials
+                            if is_data is not None and not is_data.empty:
+                                st.markdown(f"#### Income Statement — {period_toggle}")
+                                st.dataframe(fmt_stmt(is_data), use_container_width=True, height=600)
+                            else:
+                                st.info(f"No {period_toggle.lower()} income statement data available.")
+
+                        with stmt_tab_bs:
+                            bs_data = balance_sheet if period_toggle == "Annual" else quarterly_balance_sheet
+                            if bs_data is not None and not bs_data.empty:
+                                st.markdown(f"#### Balance Sheet — {period_toggle}")
+                                st.dataframe(fmt_stmt(bs_data), use_container_width=True, height=600)
+                            else:
+                                st.info(f"No {period_toggle.lower()} balance sheet data available.")
+
+                        with stmt_tab_cf:
+                            cf_data = cash_flow if period_toggle == "Annual" else quarterly_cashflow
+                            if cf_data is not None and not cf_data.empty:
+                                st.markdown(f"#### Cash Flow Statement — {period_toggle}")
+                                st.dataframe(fmt_stmt(cf_data), use_container_width=True, height=600)
+                            else:
+                                st.info(f"No {period_toggle.lower()} cash flow data available.")
+
+                # ── DCF VALUATION ──
+                with val_tab1:
+                    st.markdown("### Discounted Cash Flow (DCF) Valuation")
+                    st.caption("Fully derived from financial statements — no manual assumptions")
+
+                    # Use annual statements for DCF
+                    income_stmt = financials
+                    bal_sheet = balance_sheet
+                    cf_stmt = cash_flow
+
+                    if not has_statements:
+                        st.warning("Financial statements not available. DCF requires income statement, balance sheet, and cash flow data.")
+                    else:
                         # ═══════════════════════════════════════════
                         # EXTRACT HISTORICAL FCF FROM CASH FLOW STMT
                         # ═══════════════════════════════════════════
