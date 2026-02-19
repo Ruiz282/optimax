@@ -4731,7 +4731,21 @@ with tab_valuation:
                 # ── FINANCIAL STATEMENTS (10-K / Yahoo Finance style) ──
                 with val_tab0:
                     st.markdown("### Financial Statements")
-                    st.caption(f"Annual and quarterly data from {company_name}'s SEC filings via Yahoo Finance")
+
+                    # Detect fiscal year end
+                    fiscal_year_end = info.get('lastFiscalYearEnd', None)
+                    fy_month_name = ""
+                    if fiscal_year_end:
+                        try:
+                            from datetime import datetime as dt_cls
+                            fy_date = dt_cls.fromtimestamp(fiscal_year_end)
+                            fy_month_name = fy_date.strftime('%B')
+                        except Exception:
+                            pass
+                    if fy_month_name:
+                        st.caption(f"{company_name} fiscal year ends in **{fy_month_name}**. Data from SEC 10-K/10-Q filings via Yahoo Finance.")
+                    else:
+                        st.caption(f"Annual and quarterly data from {company_name}'s SEC filings via Yahoo Finance")
 
                     has_statements = (
                         financials is not None and not financials.empty and
@@ -4742,49 +4756,64 @@ with tab_valuation:
                     if not has_statements:
                         st.warning("Financial statements not available for this ticker.")
                     else:
-                        def fmt_stmt(df):
-                            """Format a financial statement: columns as year labels, values in readable format."""
+                        import re as re_module
+
+                        def fmt_stmt(df, is_annual=True):
+                            """Format a financial statement: FY/quarter labels, readable values."""
                             display = df.copy()
-                            display.columns = [col.strftime('%b %Y') if hasattr(col, 'strftime') else str(col) for col in display.columns]
+                            new_cols = []
+                            for col in display.columns:
+                                if hasattr(col, 'strftime'):
+                                    if is_annual:
+                                        new_cols.append(f"FY {col.strftime('%Y')} ({col.strftime('%b')})")
+                                    else:
+                                        q = (col.month - 1) // 3 + 1
+                                        new_cols.append(f"Q{q} {col.strftime('%Y')} ({col.strftime('%b')})")
+                                else:
+                                    new_cols.append(str(col))
+                            display.columns = new_cols
                             for c in display.columns:
                                 display[c] = display[c].apply(
                                     lambda x: f"${x/1e9:,.2f}B" if pd.notna(x) and isinstance(x, (int, float)) and abs(x) >= 1e9
                                     else (f"${x/1e6:,.0f}M" if pd.notna(x) and isinstance(x, (int, float)) and abs(x) >= 1e6
                                     else (f"${x:,.0f}" if pd.notna(x) and isinstance(x, (int, float)) and abs(x) >= 1
                                     else ("—" if not pd.notna(x) else f"{x}")))
-                            )
-                            # Clean up index names (CamelCase to spaced)
-                            import re
-                            display.index = [re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', str(idx)) for idx in display.index]
+                                )
+                            display.index = [re_module.sub(r'(?<=[a-z])(?=[A-Z])', ' ', str(idx)) for idx in display.index]
                             return display
 
                         period_toggle = st.radio("Period", ["Annual", "Quarterly"], horizontal=True, key="stmt_period")
+                        is_annual = period_toggle == "Annual"
+
+                        if fy_month_name and fy_month_name != "December" and is_annual:
+                            st.info(f"{company_name}'s fiscal year ends in **{fy_month_name}**, not December. Dates reflect the fiscal year-end period from the company's 10-K filing.")
 
                         stmt_tab_is, stmt_tab_bs, stmt_tab_cf = st.tabs(["Income Statement (P&L)", "Balance Sheet", "Cash Flow Statement"])
 
                         with stmt_tab_is:
-                            is_data = financials if period_toggle == "Annual" else quarterly_financials
+                            is_data = financials if is_annual else quarterly_financials
                             if is_data is not None and not is_data.empty:
-                                st.markdown(f"#### Income Statement — {period_toggle}")
-                                st.dataframe(fmt_stmt(is_data), use_container_width=True, height=600)
+                                st.markdown(f"#### Income Statement \u2014 {period_toggle}")
+                                st.dataframe(fmt_stmt(is_data, is_annual), use_container_width=True, height=600)
                             else:
                                 st.info(f"No {period_toggle.lower()} income statement data available.")
 
                         with stmt_tab_bs:
-                            bs_data = balance_sheet if period_toggle == "Annual" else quarterly_balance_sheet
+                            bs_data = balance_sheet if is_annual else quarterly_balance_sheet
                             if bs_data is not None and not bs_data.empty:
-                                st.markdown(f"#### Balance Sheet — {period_toggle}")
-                                st.dataframe(fmt_stmt(bs_data), use_container_width=True, height=600)
+                                st.markdown(f"#### Balance Sheet \u2014 {period_toggle}")
+                                st.dataframe(fmt_stmt(bs_data, is_annual), use_container_width=True, height=600)
                             else:
                                 st.info(f"No {period_toggle.lower()} balance sheet data available.")
 
                         with stmt_tab_cf:
-                            cf_data = cash_flow if period_toggle == "Annual" else quarterly_cashflow
+                            cf_data = cash_flow if is_annual else quarterly_cashflow
                             if cf_data is not None and not cf_data.empty:
-                                st.markdown(f"#### Cash Flow Statement — {period_toggle}")
-                                st.dataframe(fmt_stmt(cf_data), use_container_width=True, height=600)
+                                st.markdown(f"#### Cash Flow Statement \u2014 {period_toggle}")
+                                st.dataframe(fmt_stmt(cf_data, is_annual), use_container_width=True, height=600)
                             else:
                                 st.info(f"No {period_toggle.lower()} cash flow data available.")
+
 
                 # ── DCF VALUATION ──
                 with val_tab1:
