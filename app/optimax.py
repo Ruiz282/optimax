@@ -3508,52 +3508,71 @@ with tab_calendar:
     # TODAY'S TOP FINANCE NEWS (always visible, no holdings needed)
     # ══════════════════════════════════════════════
     st.markdown("### Today's Finance News")
-    st.caption("Latest headlines from major markets and indices")
+    st.markdown(f"**{datetime.now().strftime('%A, %B %d, %Y')}**")
 
-    with st.spinner("Loading market news..."):
-        # Fetch news from major market tickers to get broad financial news
+    try:
         import yfinance as yf
-        market_tickers = ["SPY", "QQQ", "DIA", "IWM"]
         market_news = []
         seen_titles = set()
-        for mt in market_tickers:
+        for mt in ["SPY", "QQQ", "DIA"]:
             try:
                 t = yf.Ticker(mt)
-                raw_news = t.news or []
-                for article in raw_news[:8]:
+                raw_news = t.news
+                if not raw_news:
+                    continue
+                for article in raw_news[:6]:
                     try:
-                        content = article.get("content", article)
-                        title = content.get("title", "")
+                        # Handle both old and new yfinance news formats
+                        if isinstance(article, dict):
+                            content = article.get("content", article)
+                        else:
+                            content = article
+
+                        title = content.get("title", "") if isinstance(content, dict) else getattr(content, "title", "")
                         if not title or title in seen_titles:
                             continue
                         seen_titles.add(title)
 
-                        provider = content.get("provider", {})
-                        publisher = provider.get("displayName", "") if isinstance(provider, dict) else ""
-
-                        link = ""
-                        if "canonicalUrl" in content and isinstance(content["canonicalUrl"], dict):
-                            link = content["canonicalUrl"].get("url", "")
-                        elif "clickThroughUrl" in content and isinstance(content["clickThroughUrl"], dict):
-                            link = content["clickThroughUrl"].get("url", "")
-                        elif "link" in content:
-                            link = content.get("link", "")
-
-                        pub_date_str = content.get("pubDate", "")
-                        if pub_date_str:
-                            try:
-                                pub_time = datetime.fromisoformat(pub_date_str.replace("Z", "+00:00")).replace(tzinfo=None)
-                            except Exception:
-                                pub_time = datetime.now()
+                        # Extract publisher
+                        if isinstance(content, dict):
+                            provider = content.get("provider", {})
+                            publisher = provider.get("displayName", "") if isinstance(provider, dict) else str(provider)
                         else:
-                            pub_time = datetime.fromtimestamp(article.get("providerPublishTime", 0)) if article.get("providerPublishTime") else datetime.now()
+                            publisher = getattr(content, "publisher", "")
 
-                        if title and link:
-                            source_map = {"SPY": "S&P 500", "QQQ": "Nasdaq", "DIA": "Dow Jones", "IWM": "Russell 2000"}
+                        # Extract link
+                        link = ""
+                        if isinstance(content, dict):
+                            if "canonicalUrl" in content and isinstance(content["canonicalUrl"], dict):
+                                link = content["canonicalUrl"].get("url", "")
+                            elif "clickThroughUrl" in content and isinstance(content["clickThroughUrl"], dict):
+                                link = content["clickThroughUrl"].get("url", "")
+                            else:
+                                link = content.get("link", content.get("url", ""))
+                        else:
+                            link = getattr(content, "link", getattr(content, "url", ""))
+
+                        # Extract publish time
+                        pub_time = datetime.now()
+                        if isinstance(content, dict):
+                            pub_str = content.get("pubDate", "")
+                            if pub_str:
+                                try:
+                                    pub_time = datetime.fromisoformat(str(pub_str).replace("Z", "+00:00")).replace(tzinfo=None)
+                                except Exception:
+                                    pass
+                            elif isinstance(article, dict) and article.get("providerPublishTime"):
+                                try:
+                                    pub_time = datetime.fromtimestamp(article["providerPublishTime"])
+                                except Exception:
+                                    pass
+
+                        if title:
+                            source_map = {"SPY": "S&P 500", "QQQ": "Nasdaq", "DIA": "Dow Jones"}
                             market_news.append({
                                 "title": title,
-                                "publisher": publisher,
-                                "link": link,
+                                "publisher": publisher or "Financial News",
+                                "link": link or "#",
                                 "published": pub_time,
                                 "symbol": source_map.get(mt, "Markets"),
                             })
@@ -3561,41 +3580,34 @@ with tab_calendar:
                         continue
             except Exception:
                 continue
+
         market_news.sort(key=lambda x: x["published"], reverse=True)
 
-    if market_news:
-        # Show today's date
-        st.markdown(f"**{datetime.now().strftime('%A, %B %d, %Y')}**")
+        if market_news:
+            for news in market_news[:12]:
+                time_ago = datetime.now() - news["published"]
+                if time_ago.days > 0:
+                    time_str = f"{time_ago.days}d ago"
+                elif time_ago.seconds > 3600:
+                    time_str = f"{time_ago.seconds // 3600}h ago"
+                else:
+                    time_str = f"{max(1, time_ago.seconds // 60)}m ago"
 
-        for i, news in enumerate(market_news[:15]):
-            time_ago = datetime.now() - news["published"]
-            if time_ago.days > 0:
-                time_str = f"{time_ago.days}d ago"
-            elif time_ago.seconds > 3600:
-                time_str = f"{time_ago.seconds // 3600}h ago"
-            else:
-                time_str = f"{time_ago.seconds // 60}m ago"
+                cat_colors = {"S&P 500": "#28a745", "Nasdaq": "#6C63FF", "Dow Jones": "#ff6b6b"}
+                badge_color = cat_colors.get(news["symbol"], "#4da6ff")
 
-            # Color-code by market category
-            cat_colors = {"S&P 500": "#28a745", "Nasdaq": "#6C63FF", "Dow Jones": "#ff6b6b", "Russell 2000": "#ffa600", "Markets": "#4da6ff"}
-            badge_color = cat_colors.get(news["symbol"], "#4da6ff")
-
-            st.markdown(
-                f"""
-                <div style='padding: 12px; margin: 8px 0; background-color: {CHART_FACE_COLOR}; border-radius: 8px; border-left: 4px solid {badge_color};'>
-                    <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;'>
-                        <span style='background-color: {badge_color}; padding: 3px 10px; border-radius: 4px; font-size: 0.85em; font-weight: bold; color: white;'>{news["symbol"]}</span>
-                        <span style='color: #888; font-size: 0.8em;'>{time_str} • {news["publisher"]}</span>
-                    </div>
-                    <a href='{news["link"]}' target='_blank' style='color: #4da6ff; text-decoration: none; font-weight: 500; font-size: 1.05em; display: block;'>
-                        {news["title"]} ↗
-                    </a>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-    else:
-        st.info("Could not load market news at this time.")
+                st.markdown(
+                    f"<div style='padding:12px;margin:8px 0;background:{CHART_FACE_COLOR};border-radius:8px;border-left:4px solid {badge_color};'>"
+                    f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;'>"
+                    f"<span style='background:{badge_color};padding:3px 10px;border-radius:4px;font-size:0.85em;font-weight:bold;color:white;'>{news['symbol']}</span>"
+                    f"<span style='color:#888;font-size:0.8em;'>{time_str} • {news['publisher']}</span></div>"
+                    f"<a href='{news['link']}' target='_blank' style='color:#4da6ff;text-decoration:none;font-weight:500;font-size:1.05em;'>{news['title']} ↗</a></div>",
+                    unsafe_allow_html=True
+                )
+        else:
+            st.info("No market news available at this time. Try refreshing the page.")
+    except Exception as e:
+        st.error(f"Error loading news: {str(e)}")
 
     st.markdown("---")
 
@@ -4222,417 +4234,421 @@ with tab_options:
 
     if not expirations:
         st.warning("No options expirations available. Enter a valid ticker symbol in Options Trading settings above.")
-        st.stop()
+        selected_exp = None
+        selected_idx = None
+    else:
+        # ── Expiration Selector ──
+        selected_idx = st.selectbox(
+            "Expiration Date",
+            range(len(expirations)),
+            format_func=lambda i: exp_with_dte[i],
+            index=min(2, len(expirations) - 1),
+            key="options_exp_selector"
+        )
+        selected_exp = expirations[selected_idx]
 
-    # ── Expiration Selector ──
-    selected_idx = st.selectbox(
-        "Expiration Date",
-        range(len(expirations)),
-        format_func=lambda i: exp_with_dte[i],
-        index=min(2, len(expirations) - 1),
-        key="options_exp_selector"
-    )
-    selected_exp = expirations[selected_idx]
-    selected_dte = (datetime.strptime(selected_exp, "%Y-%m-%d") - datetime.now()).days
+    if selected_exp:
+        selected_dte = (datetime.strptime(selected_exp, "%Y-%m-%d") - datetime.now()).days
 
-    # ── Fetch Chain ──
-    with st.spinner(f"Loading options chain for {selected_exp}..."):
-        chain_df, _ = get_enriched_chain(symbol, selected_exp, risk_free_rate)
+        # ── Fetch Chain ──
+        with st.spinner(f"Loading options chain for {selected_exp}..."):
+            chain_df, _ = get_enriched_chain(symbol, selected_exp, risk_free_rate)
 
-    st.markdown("---")
+        st.markdown("---")
 
-    # Create subtabs for options trading
-    options_subtab1, options_subtab2, options_subtab3 = st.tabs([
-        "Strategy Recommender",
-        "Options Chain",
-        "Greeks & IV"
-    ])
+        # Create subtabs for options trading
+        options_subtab1, options_subtab2, options_subtab3 = st.tabs([
+            "Strategy Recommender",
+            "Options Chain",
+            "Greeks & IV"
+        ])
 
-    with options_subtab1:
-        st.markdown("#### Recommended Strategies")
+        with options_subtab1:
+            st.markdown("#### Recommended Strategies")
 
-        regime_str = f" | Regime: **{entropy_signal.regime}**" if entropy_signal else ""
-        st.caption(
-            f"View: **{outlook}** | "
-            f"IV: **{iv_percentile:.0f}th %ile** | "
-            f"DTE: **{selected_dte}d** | "
-            f"Risk: **{risk_tolerance}** | "
-            f"Portfolio: **${portfolio_value:,.0f}**"
-            f"{regime_str}"
+            regime_str = f" | Regime: **{entropy_signal.regime}**" if entropy_signal else ""
+            st.caption(
+                f"View: **{outlook}** | "
+                f"IV: **{iv_percentile:.0f}th %ile** | "
+                f"DTE: **{selected_dte}d** | "
+                f"Risk: **{risk_tolerance}** | "
+                f"Portfolio: **${portfolio_value:,.0f}**"
+                f"{regime_str}"
+            )
+
+        # Build entropy adjustment function
+        entropy_fn = None
+        if entropy_signal:
+            entropy_fn = lambda name, sig=entropy_signal: entropy_score_adjustment(name, sig)
+
+        recommendations = recommend_strategies(
+            outlook=outlook_key,
+            iv_percentile=iv_percentile,
+            dte=selected_dte,
+            risk_tolerance=risk_tol_key,
+            spot=spot,
+            chain_df=chain_df,
+            entropy_adjustment_fn=entropy_fn,
         )
 
-    # Build entropy adjustment function
-    entropy_fn = None
-    if entropy_signal:
-        entropy_fn = lambda name, sig=entropy_signal: entropy_score_adjustment(name, sig)
+        if not recommendations:
+            st.warning("No strategies match your criteria. Try adjusting your outlook or risk tolerance.")
+        else:
+            for i, rec in enumerate(recommendations[:5]):
+                strat = rec.strategy
 
-    recommendations = recommend_strategies(
-        outlook=outlook_key,
-        iv_percentile=iv_percentile,
-        dte=selected_dte,
-        risk_tolerance=risk_tol_key,
-        spot=spot,
-        chain_df=chain_df,
-        entropy_adjustment_fn=entropy_fn,
-    )
-
-    if not recommendations:
-        st.warning("No strategies match your criteria. Try adjusting your outlook or risk tolerance.")
-    else:
-        for i, rec in enumerate(recommendations[:5]):
-            strat = rec.strategy
-
-            # Generate trade card
-            card = generate_trade_card(
-                strategy_name=strat.name,
-                symbol=symbol,
-                expiration=selected_exp,
-                dte=selected_dte,
-                spot=spot,
-                portfolio_value=portfolio_value,
-                risk_per_trade_pct=risk_per_trade,
-                concrete_legs=rec.concrete_legs,
-                net_cost=rec.net_cost,
-                max_loss_dollars=rec.max_loss_dollars,
-                max_gain_dollars=rec.max_gain_dollars,
-                breakevens=rec.breakeven,
-            )
-
-            # Entropy badge
-            entropy_badge = ""
-            if rec.entropy_adjustment >= 5:
-                entropy_badge = " [ENTROPY FAVORED]"
-            elif rec.entropy_adjustment <= -5:
-                entropy_badge = " [ENTROPY PENALIZED]"
-
-            with st.expander(
-                f"#{rec.rank}  {strat.name}{entropy_badge}  —  "
-                f"Score: {rec.score:.0f}/100  |  "
-                f"{'Credit' if card.is_credit else 'Debit'}: "
-                f"${card.net_cost_per_share:.2f}  |  "
-                f"Size: {card.recommended_contracts} contracts",
-                expanded=(i == 0),
-            ):
-                # ══════════════ TRADE CARD ══════════════
-
-                st.markdown("### Trade Card")
-
-                # Row 1: Key metrics
-                m1, m2, m3, m4 = st.columns(4)
-                with m1:
-                    st.metric("Contracts", f"{card.recommended_contracts}")
-                with m2:
-                    st.metric("Max Loss (total)",
-                              f"${card.max_loss_total:,.0f}")
-                with m3:
-                    if card.max_gain_total is not None:
-                        st.metric("Max Gain (total)",
-                                  f"${card.max_gain_total:,.0f}")
-                    else:
-                        st.metric("Max Gain", "Unlimited")
-                with m4:
-                    if card.risk_reward_ratio is not None:
-                        st.metric("Risk/Reward",
-                                  f"1:{card.risk_reward_ratio:.2f}")
-                    else:
-                        st.metric("Risk/Reward", "Unlimited upside")
-
-                # Row 2: Position sizing details
-                s1, s2, s3, s4 = st.columns(4)
-                with s1:
-                    st.metric("Capital Required",
-                              f"${card.total_capital_required:,.0f}")
-                with s2:
-                    st.metric("% of Portfolio",
-                              f"{card.total_capital_required / portfolio_value:.1%}"
-                              if portfolio_value > 0 else "-")
-                with s3:
-                    st.metric("Max Risk Budget",
-                              f"${card.max_risk_dollars:,.0f}")
-                with s4:
-                    if len(card.breakevens) == 1:
-                        st.metric("Break-even", f"${card.breakevens[0]:,.2f}")
-                    else:
-                        be_str = " / ".join(f"${b:.2f}" for b in card.breakevens)
-                        st.metric("Break-evens", be_str)
-
-                # Trade construction table
-                st.markdown("**Trade Construction:**")
-                leg_data = []
-                for leg in rec.concrete_legs:
-                    leg_data.append({
-                        "Action": "BUY" if leg["action"] == "buy" else "SELL",
-                        "Type": leg["type"].upper(),
-                        "Strike": f"${leg['strike']:.0f}",
-                        "Price": f"${leg['estimated_price']:.2f}",
-                        "Qty": card.recommended_contracts,
-                    })
-                st.dataframe(
-                    pd.DataFrame(leg_data),
-                    use_container_width=False,
-                    hide_index=True,
+                # Generate trade card
+                card = generate_trade_card(
+                    strategy_name=strat.name,
+                    symbol=symbol,
+                    expiration=selected_exp,
+                    dte=selected_dte,
+                    spot=spot,
+                    portfolio_value=portfolio_value,
+                    risk_per_trade_pct=risk_per_trade,
+                    concrete_legs=rec.concrete_legs,
+                    net_cost=rec.net_cost,
+                    max_loss_dollars=rec.max_loss_dollars,
+                    max_gain_dollars=rec.max_gain_dollars,
+                    breakevens=rec.breakeven,
                 )
 
-                cost_label = "Net Credit" if card.is_credit else "Net Debit"
-                st.markdown(
-                    f"**{cost_label}: ${card.net_cost_per_share:.2f}/share "
-                    f"(${card.net_cost_per_contract:.2f}/contract "
-                    f"x {card.recommended_contracts} = "
-                    f"${card.net_cost_per_contract * card.recommended_contracts:,.2f} total)**"
-                )
+                # Entropy badge
+                entropy_badge = ""
+                if rec.entropy_adjustment >= 5:
+                    entropy_badge = " [ENTROPY FAVORED]"
+                elif rec.entropy_adjustment <= -5:
+                    entropy_badge = " [ENTROPY PENALIZED]"
 
-                # ── Exit Rules ──
-                st.markdown("**Exit Rules:**")
-                ex1, ex2 = st.columns(2)
-                with ex1:
-                    st.success(
-                        f"**Profit Target:** Close at "
-                        f"{card.profit_target_pct:.0%} of max profit = "
-                        f"${card.profit_target_dollars:,.0f} per contract"
-                    )
-                with ex2:
-                    st.error(
-                        f"**Stop Loss:** Close at "
-                        f"${card.stop_loss_dollars:,.0f} per contract loss"
+                with st.expander(
+                    f"#{rec.rank}  {strat.name}{entropy_badge}  —  "
+                    f"Score: {rec.score:.0f}/100  |  "
+                    f"{'Credit' if card.is_credit else 'Debit'}: "
+                    f"${card.net_cost_per_share:.2f}  |  "
+                    f"Size: {card.recommended_contracts} contracts",
+                    expanded=(i == 0),
+                ):
+                    # ══════════════ TRADE CARD ══════════════
+
+                    st.markdown("### Trade Card")
+
+                    # Row 1: Key metrics
+                    m1, m2, m3, m4 = st.columns(4)
+                    with m1:
+                        st.metric("Contracts", f"{card.recommended_contracts}")
+                    with m2:
+                        st.metric("Max Loss (total)",
+                                  f"${card.max_loss_total:,.0f}")
+                    with m3:
+                        if card.max_gain_total is not None:
+                            st.metric("Max Gain (total)",
+                                      f"${card.max_gain_total:,.0f}")
+                        else:
+                            st.metric("Max Gain", "Unlimited")
+                    with m4:
+                        if card.risk_reward_ratio is not None:
+                            st.metric("Risk/Reward",
+                                      f"1:{card.risk_reward_ratio:.2f}")
+                        else:
+                            st.metric("Risk/Reward", "Unlimited upside")
+
+                    # Row 2: Position sizing details
+                    s1, s2, s3, s4 = st.columns(4)
+                    with s1:
+                        st.metric("Capital Required",
+                                  f"${card.total_capital_required:,.0f}")
+                    with s2:
+                        st.metric("% of Portfolio",
+                                  f"{card.total_capital_required / portfolio_value:.1%}"
+                                  if portfolio_value > 0 else "-")
+                    with s3:
+                        st.metric("Max Risk Budget",
+                                  f"${card.max_risk_dollars:,.0f}")
+                    with s4:
+                        if len(card.breakevens) == 1:
+                            st.metric("Break-even", f"${card.breakevens[0]:,.2f}")
+                        else:
+                            be_str = " / ".join(f"${b:.2f}" for b in card.breakevens)
+                            st.metric("Break-evens", be_str)
+
+                    # Trade construction table
+                    st.markdown("**Trade Construction:**")
+                    leg_data = []
+                    for leg in rec.concrete_legs:
+                        leg_data.append({
+                            "Action": "BUY" if leg["action"] == "buy" else "SELL",
+                            "Type": leg["type"].upper(),
+                            "Strike": f"${leg['strike']:.0f}",
+                            "Price": f"${leg['estimated_price']:.2f}",
+                            "Qty": card.recommended_contracts,
+                        })
+                    st.dataframe(
+                        pd.DataFrame(leg_data),
+                        use_container_width=False,
+                        hide_index=True,
                     )
 
-                # ── Kelly Criterion ──
-                if card.kelly_fraction is not None:
-                    if card.kelly_fraction > 0:
-                        st.caption(
-                            f"Half-Kelly suggests {card.kelly_contracts} contracts "
-                            f"({card.kelly_fraction:.1%} of portfolio). "
-                            f"Risk-rule sizing: {card.recommended_contracts} contracts."
+                    cost_label = "Net Credit" if card.is_credit else "Net Debit"
+                    st.markdown(
+                        f"**{cost_label}: ${card.net_cost_per_share:.2f}/share "
+                        f"(${card.net_cost_per_contract:.2f}/contract "
+                        f"x {card.recommended_contracts} = "
+                        f"${card.net_cost_per_contract * card.recommended_contracts:,.2f} total)**"
+                    )
+
+                    # ── Exit Rules ──
+                    st.markdown("**Exit Rules:**")
+                    ex1, ex2 = st.columns(2)
+                    with ex1:
+                        st.success(
+                            f"**Profit Target:** Close at "
+                            f"{card.profit_target_pct:.0%} of max profit = "
+                            f"${card.profit_target_dollars:,.0f} per contract"
                         )
-                    elif card.kelly_fraction < 0:
-                        st.caption(
-                            f"Kelly criterion is negative ({card.kelly_fraction:.3f}) — "
-                            f"risk/reward may not justify this trade at estimated probability."
+                    with ex2:
+                        st.error(
+                            f"**Stop Loss:** Close at "
+                            f"${card.stop_loss_dollars:,.0f} per contract loss"
                         )
 
-                # ── Warnings ──
-                for warning in card.warnings:
-                    st.warning(warning)
+                    # ── Kelly Criterion ──
+                    if card.kelly_fraction is not None:
+                        if card.kelly_fraction > 0:
+                            st.caption(
+                                f"Half-Kelly suggests {card.kelly_contracts} contracts "
+                                f"({card.kelly_fraction:.1%} of portfolio). "
+                                f"Risk-rule sizing: {card.recommended_contracts} contracts."
+                            )
+                        elif card.kelly_fraction < 0:
+                            st.caption(
+                                f"Kelly criterion is negative ({card.kelly_fraction:.3f}) — "
+                                f"risk/reward may not justify this trade at estimated probability."
+                            )
 
-                # ── Payoff Diagram ──
-                price_range, payoff, payoff_dollars = compute_strategy_payoff(
-                    rec.concrete_legs, rec.net_cost, spot
+                    # ── Warnings ──
+                    for warning in card.warnings:
+                        st.warning(warning)
+
+                    # ── Payoff Diagram ──
+                    price_range, payoff, payoff_dollars = compute_strategy_payoff(
+                        rec.concrete_legs, rec.net_cost, spot
+                    )
+                    payoff_total = payoff_dollars * max(card.recommended_contracts, 1)
+
+                    fig, ax = plt.subplots(figsize=(9, 4), facecolor=CHART_BG_COLOR)
+                    ax.set_facecolor(CHART_FACE_COLOR)
+                    ax.plot(price_range, payoff_total, color="#1f77b4", linewidth=2)
+                    ax.axhline(0, color="white", linewidth=0.5)
+                    ax.axvline(spot, color="gray", linestyle="--", alpha=0.7,
+                               label=f"Spot ${spot:.2f}")
+                    for be in rec.breakeven:
+                        ax.axvline(be, color="#00ff00", linestyle=":", alpha=0.7,
+                                   label=f"B/E ${be:.2f}")
+                    ax.fill_between(price_range, payoff_total, 0,
+                                    where=(payoff_total > 0), color="green", alpha=0.2)
+                    ax.fill_between(price_range, payoff_total, 0,
+                                    where=(payoff_total < 0), color="red", alpha=0.2)
+                    ax.set_xlabel("Stock Price at Expiration", color='white')
+                    ax.set_ylabel("Profit / Loss ($)", color='white')
+                    contracts_label = max(card.recommended_contracts, 1)
+                    ax.set_title(f"{strat.name} — P&L at Expiration ({contracts_label} contract{'s' if contracts_label > 1 else ''})", color='white')
+                    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter('$%.0f'))
+                    ax.tick_params(colors='white')
+                    ax.legend(fontsize=8, facecolor=CHART_FACE_COLOR, labelcolor='white')
+                    ax.grid(True, alpha=0.3)
+                    fig.tight_layout()
+                    st.pyplot(fig)
+                    plt.close(fig)
+
+                    # ── Why + Scoring ──
+                    st.markdown("**Why this strategy works here:**")
+                    st.markdown(f"> {strat.why_it_works}")
+
+                    with st.expander("Scoring breakdown", expanded=False):
+                        for reason in rec.explanation.split(" | "):
+                            st.markdown(f"- {reason}")
+                        st.markdown(f"- **Greeks profile:** {strat.greeks_profile}")
+                        st.markdown(f"- **Risk type:** {strat.risk_type.title()} | "
+                                    f"**Complexity:** {'Simple' if strat.complexity == 1 else 'Intermediate' if strat.complexity == 2 else 'Advanced'}")
+
+
+        # ═════════════════════════════════════════════
+        # SUBTAB 2: Options Chain Explorer
+        # ═════════════════════════════════════════════
+
+        with options_subtab2:
+            st.markdown("#### Options Chain Explorer")
+
+            filter_col1, filter_col2, filter_col3 = st.columns(3)
+            with filter_col1:
+                moneyness_filter = st.multiselect(
+                    "Moneyness", ["ITM", "ATM", "OTM"],
+                    default=["ITM", "ATM", "OTM"], key="chain_moneyness",
                 )
-                payoff_total = payoff_dollars * max(card.recommended_contracts, 1)
+            with filter_col2:
+                min_oi = st.number_input("Min Open Interest", value=0, min_value=0,
+                                          step=10, key="chain_oi")
+            with filter_col3:
+                min_vol = st.number_input("Min Volume", value=0, min_value=0,
+                                           step=10, key="chain_vol")
 
-                fig, ax = plt.subplots(figsize=(9, 4), facecolor=CHART_BG_COLOR)
-                ax.set_facecolor(CHART_FACE_COLOR)
-                ax.plot(price_range, payoff_total, color="#1f77b4", linewidth=2)
-                ax.axhline(0, color="white", linewidth=0.5)
-                ax.axvline(spot, color="gray", linestyle="--", alpha=0.7,
-                           label=f"Spot ${spot:.2f}")
-                for be in rec.breakeven:
-                    ax.axvline(be, color="#00ff00", linestyle=":", alpha=0.7,
-                               label=f"B/E ${be:.2f}")
-                ax.fill_between(price_range, payoff_total, 0,
-                                where=(payoff_total > 0), color="green", alpha=0.2)
-                ax.fill_between(price_range, payoff_total, 0,
-                                where=(payoff_total < 0), color="red", alpha=0.2)
-                ax.set_xlabel("Stock Price at Expiration", color='white')
-                ax.set_ylabel("Profit / Loss ($)", color='white')
-                contracts_label = max(card.recommended_contracts, 1)
-                ax.set_title(f"{strat.name} — P&L at Expiration ({contracts_label} contract{'s' if contracts_label > 1 else ''})", color='white')
-                ax.yaxis.set_major_formatter(mticker.FormatStrFormatter('$%.0f'))
-                ax.tick_params(colors='white')
-                ax.legend(fontsize=8, facecolor=CHART_FACE_COLOR, labelcolor='white')
-                ax.grid(True, alpha=0.3)
-                fig.tight_layout()
-                st.pyplot(fig)
-                plt.close(fig)
+            filtered = chain_df[chain_df["moneyness_label"].isin(moneyness_filter)]
+            if min_oi > 0:
+                filtered = filtered[filtered["openInterest"].fillna(0) >= min_oi]
+            if min_vol > 0:
+                filtered = filtered[filtered["volume"].fillna(0) >= min_vol]
 
-                # ── Why + Scoring ──
-                st.markdown("**Why this strategy works here:**")
-                st.markdown(f"> {strat.why_it_works}")
-
-                with st.expander("Scoring breakdown", expanded=False):
-                    for reason in rec.explanation.split(" | "):
-                        st.markdown(f"- {reason}")
-                    st.markdown(f"- **Greeks profile:** {strat.greeks_profile}")
-                    st.markdown(f"- **Risk type:** {strat.risk_type.title()} | "
-                                f"**Complexity:** {'Simple' if strat.complexity == 1 else 'Intermediate' if strat.complexity == 2 else 'Advanced'}")
-
-
-    # ═════════════════════════════════════════════
-    # SUBTAB 2: Options Chain Explorer
-    # ═════════════════════════════════════════════
-
-    with options_subtab2:
-        st.markdown("#### Options Chain Explorer")
-
-        filter_col1, filter_col2, filter_col3 = st.columns(3)
-        with filter_col1:
-            moneyness_filter = st.multiselect(
-                "Moneyness", ["ITM", "ATM", "OTM"],
-                default=["ITM", "ATM", "OTM"], key="chain_moneyness",
-            )
-        with filter_col2:
-            min_oi = st.number_input("Min Open Interest", value=0, min_value=0,
-                                      step=10, key="chain_oi")
-        with filter_col3:
-            min_vol = st.number_input("Min Volume", value=0, min_value=0,
-                                       step=10, key="chain_vol")
-
-        filtered = chain_df[chain_df["moneyness_label"].isin(moneyness_filter)]
-        if min_oi > 0:
-            filtered = filtered[filtered["openInterest"].fillna(0) >= min_oi]
-        if min_vol > 0:
-            filtered = filtered[filtered["volume"].fillna(0) >= min_vol]
-
-        display_cols = [
-            "strike", "bid", "ask", "midPrice", "lastPrice", "bsPrice",
-            "impliedVolatility", "delta", "gamma", "theta", "vega",
-            "openInterest", "volume", "moneyness_label",
-        ]
-
-        def format_chain(df):
-            display = df[display_cols].copy()
-            display.columns = [
-                "Strike", "Bid", "Ask", "Mid", "Last", "BS Price",
-                "IV", "Delta", "Gamma", "Theta", "Vega", "OI", "Vol", "Money",
+            display_cols = [
+                "strike", "bid", "ask", "midPrice", "lastPrice", "bsPrice",
+                "impliedVolatility", "delta", "gamma", "theta", "vega",
+                "openInterest", "volume", "moneyness_label",
             ]
-            for col in ["Bid", "Ask", "Mid", "Last", "BS Price"]:
-                display[col] = display[col].apply(
-                    lambda x: f"${x:.2f}" if pd.notna(x) else "-")
-            display["IV"] = display["IV"].apply(
-                lambda x: f"{x:.1%}" if pd.notna(x) else "-")
-            display["Delta"] = display["Delta"].apply(
-                lambda x: f"{x:.3f}" if pd.notna(x) else "-")
-            display["Gamma"] = display["Gamma"].apply(
-                lambda x: f"{x:.4f}" if pd.notna(x) else "-")
-            display["Theta"] = display["Theta"].apply(
-                lambda x: f"{x:.3f}" if pd.notna(x) else "-")
-            display["Vega"] = display["Vega"].apply(
-                lambda x: f"{x:.3f}" if pd.notna(x) else "-")
-            display["Strike"] = display["Strike"].apply(lambda x: f"${x:.2f}")
-            display["OI"] = display["OI"].apply(
-                lambda x: f"{int(x):,}" if pd.notna(x) else "-")
-            display["Vol"] = display["Vol"].apply(
-                lambda x: f"{int(x):,}" if pd.notna(x) else "-")
-            return display
 
-        chain_tab_calls, chain_tab_puts = st.tabs(["Calls", "Puts"])
+            def format_chain(df):
+                display = df[display_cols].copy()
+                display.columns = [
+                    "Strike", "Bid", "Ask", "Mid", "Last", "BS Price",
+                    "IV", "Delta", "Gamma", "Theta", "Vega", "OI", "Vol", "Money",
+                ]
+                for col in ["Bid", "Ask", "Mid", "Last", "BS Price"]:
+                    display[col] = display[col].apply(
+                        lambda x: f"${x:.2f}" if pd.notna(x) else "-")
+                display["IV"] = display["IV"].apply(
+                    lambda x: f"{x:.1%}" if pd.notna(x) else "-")
+                display["Delta"] = display["Delta"].apply(
+                    lambda x: f"{x:.3f}" if pd.notna(x) else "-")
+                display["Gamma"] = display["Gamma"].apply(
+                    lambda x: f"{x:.4f}" if pd.notna(x) else "-")
+                display["Theta"] = display["Theta"].apply(
+                    lambda x: f"{x:.3f}" if pd.notna(x) else "-")
+                display["Vega"] = display["Vega"].apply(
+                    lambda x: f"{x:.3f}" if pd.notna(x) else "-")
+                display["Strike"] = display["Strike"].apply(lambda x: f"${x:.2f}")
+                display["OI"] = display["OI"].apply(
+                    lambda x: f"{int(x):,}" if pd.notna(x) else "-")
+                display["Vol"] = display["Vol"].apply(
+                    lambda x: f"{int(x):,}" if pd.notna(x) else "-")
+                return display
 
-        with chain_tab_calls:
-            calls = filtered[filtered["optionType"] == "call"].sort_values("strike")
-            if calls.empty:
-                st.warning("No calls match your filters.")
-            else:
-                st.caption(f"{len(calls)} contracts | Spot: ${spot:.2f} | DTE: {chain_df['dte'].iloc[0]}d")
-                st.dataframe(format_chain(calls), use_container_width=True,
-                             hide_index=True, height=min(500, 35 * len(calls) + 38))
+            chain_tab_calls, chain_tab_puts = st.tabs(["Calls", "Puts"])
 
-        with chain_tab_puts:
-            puts = filtered[filtered["optionType"] == "put"].sort_values("strike")
-            if puts.empty:
-                st.warning("No puts match your filters.")
-            else:
-                st.caption(f"{len(puts)} contracts | Spot: ${spot:.2f} | DTE: {chain_df['dte'].iloc[0]}d")
-                st.dataframe(format_chain(puts), use_container_width=True,
-                             hide_index=True, height=min(500, 35 * len(puts) + 38))
+            with chain_tab_calls:
+                calls = filtered[filtered["optionType"] == "call"].sort_values("strike")
+                if calls.empty:
+                    st.warning("No calls match your filters.")
+                else:
+                    st.caption(f"{len(calls)} contracts | Spot: ${spot:.2f} | DTE: {chain_df['dte'].iloc[0]}d")
+                    st.dataframe(format_chain(calls), use_container_width=True,
+                                 hide_index=True, height=min(500, 35 * len(calls) + 38))
+
+            with chain_tab_puts:
+                puts = filtered[filtered["optionType"] == "put"].sort_values("strike")
+                if puts.empty:
+                    st.warning("No puts match your filters.")
+                else:
+                    st.caption(f"{len(puts)} contracts | Spot: ${spot:.2f} | DTE: {chain_df['dte'].iloc[0]}d")
+                    st.dataframe(format_chain(puts), use_container_width=True,
+                                 hide_index=True, height=min(500, 35 * len(puts) + 38))
 
 
-    # ═════════════════════════════════════════════
-    # SUBTAB 3: Greeks & IV
-    # ═════════════════════════════════════════════
+        # ═════════════════════════════════════════════
+        # SUBTAB 3: Greeks & IV
+        # ═════════════════════════════════════════════
 
-    with options_subtab3:
-        st.markdown("#### Greeks Across Strikes")
+        with options_subtab3:
+            st.markdown("#### Greeks Across Strikes")
 
-        liquid = chain_df[chain_df["openInterest"].fillna(0) > 10].copy()
-        if liquid.empty:
-            liquid = chain_df.copy()
-        liquid = liquid[(liquid["moneyness"] >= 0.80) & (liquid["moneyness"] <= 1.20)]
+            liquid = chain_df[chain_df["openInterest"].fillna(0) > 10].copy()
+            if liquid.empty:
+                liquid = chain_df.copy()
+            liquid = liquid[(liquid["moneyness"] >= 0.80) & (liquid["moneyness"] <= 1.20)]
 
-        greek_type = st.selectbox("Select Greek", ["Delta", "Gamma", "Theta", "Vega"],
-                                   index=0, key="greek_select")
-        greek_col = greek_type.lower()
+            greek_type = st.selectbox("Select Greek", ["Delta", "Gamma", "Theta", "Vega"],
+                                       index=0, key="greek_select")
+            greek_col = greek_type.lower()
 
-        fig, ax = plt.subplots(figsize=(10, 5), facecolor=CHART_BG_COLOR)
-        ax.set_facecolor(CHART_FACE_COLOR)
-        calls_g = liquid[liquid["optionType"] == "call"].sort_values("strike")
-        puts_g = liquid[liquid["optionType"] == "put"].sort_values("strike")
+            fig, ax = plt.subplots(figsize=(10, 5), facecolor=CHART_BG_COLOR)
+            ax.set_facecolor(CHART_FACE_COLOR)
+            calls_g = liquid[liquid["optionType"] == "call"].sort_values("strike")
+            puts_g = liquid[liquid["optionType"] == "put"].sort_values("strike")
 
-        if not calls_g.empty:
-            ax.plot(calls_g["strike"], calls_g[greek_col], "b-o", markersize=3,
-                    label=f"Call {greek_type}", linewidth=1.5)
-        if not puts_g.empty:
-            ax.plot(puts_g["strike"], puts_g[greek_col], "r-o", markersize=3,
-                    label=f"Put {greek_type}", linewidth=1.5)
+            if not calls_g.empty:
+                ax.plot(calls_g["strike"], calls_g[greek_col], "b-o", markersize=3,
+                        label=f"Call {greek_type}", linewidth=1.5)
+            if not puts_g.empty:
+                ax.plot(puts_g["strike"], puts_g[greek_col], "r-o", markersize=3,
+                        label=f"Put {greek_type}", linewidth=1.5)
 
-        ax.axvline(spot, color="gray", linestyle="--", alpha=0.7, label=f"Spot ${spot:.2f}")
-        ax.set_xlabel("Strike Price", color='white')
-        ax.set_ylabel(greek_type, color='white')
-        ax.set_title(f"{symbol} — {greek_type} by Strike ({selected_exp})", color='white')
-        ax.tick_params(colors='white')
-        ax.legend(facecolor=CHART_FACE_COLOR, labelcolor='white')
-        ax.grid(True, alpha=0.3)
-        fig.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
+            ax.axvline(spot, color="gray", linestyle="--", alpha=0.7, label=f"Spot ${spot:.2f}")
+            ax.set_xlabel("Strike Price", color='white')
+            ax.set_ylabel(greek_type, color='white')
+            ax.set_title(f"{symbol} — {greek_type} by Strike ({selected_exp})", color='white')
+            ax.tick_params(colors='white')
+            ax.legend(facecolor=CHART_FACE_COLOR, labelcolor='white')
+            ax.grid(True, alpha=0.3)
+            fig.tight_layout()
+            st.pyplot(fig)
+            plt.close(fig)
 
-        # IV Smile
-        st.subheader("Volatility Smile")
-        fig2, ax2 = plt.subplots(figsize=(10, 5), facecolor=CHART_BG_COLOR)
-        ax2.set_facecolor(CHART_FACE_COLOR)
-        if not calls_g.empty:
-            ax2.plot(calls_g["strike"], calls_g["impliedVolatility"] * 100,
-                     "b-o", markersize=3, label="Call IV", linewidth=1.5)
-        if not puts_g.empty:
-            ax2.plot(puts_g["strike"], puts_g["impliedVolatility"] * 100,
-                     "r-o", markersize=3, label="Put IV", linewidth=1.5)
-        ax2.axvline(spot, color="gray", linestyle="--", alpha=0.7, label=f"Spot ${spot:.2f}")
-        ax2.set_xlabel("Strike Price", color='white')
-        ax2.set_ylabel("Implied Volatility (%)", color='white')
-        ax2.set_title(f"{symbol} — Volatility Smile ({selected_exp})", color='white')
-        ax2.tick_params(colors='white')
-        ax2.legend(facecolor=CHART_FACE_COLOR, labelcolor='white')
-        ax2.grid(True, alpha=0.3)
-        fig2.tight_layout()
-        st.pyplot(fig2)
-        plt.close(fig2)
+            # IV Smile
+            st.subheader("Volatility Smile")
+            fig2, ax2 = plt.subplots(figsize=(10, 5), facecolor=CHART_BG_COLOR)
+            ax2.set_facecolor(CHART_FACE_COLOR)
+            if not calls_g.empty:
+                ax2.plot(calls_g["strike"], calls_g["impliedVolatility"] * 100,
+                         "b-o", markersize=3, label="Call IV", linewidth=1.5)
+            if not puts_g.empty:
+                ax2.plot(puts_g["strike"], puts_g["impliedVolatility"] * 100,
+                         "r-o", markersize=3, label="Put IV", linewidth=1.5)
+            ax2.axvline(spot, color="gray", linestyle="--", alpha=0.7, label=f"Spot ${spot:.2f}")
+            ax2.set_xlabel("Strike Price", color='white')
+            ax2.set_ylabel("Implied Volatility (%)", color='white')
+            ax2.set_title(f"{symbol} — Volatility Smile ({selected_exp})", color='white')
+            ax2.tick_params(colors='white')
+            ax2.legend(facecolor=CHART_FACE_COLOR, labelcolor='white')
+            ax2.grid(True, alpha=0.3)
+            fig2.tight_layout()
+            st.pyplot(fig2)
+            plt.close(fig2)
 
-        # IV vs RV
-        if iv_data:
-            st.subheader("Implied vs. Realized Volatility")
-            vol_data = {
-                "Metric": ["Current ATM IV", "30d RV", "60d RV", "90d RV"],
-                "Value": [iv_data["current_iv"], iv_data["rv_30"],
-                          iv_data["rv_60"], iv_data["rv_90"]],
-            }
-            vol_df = pd.DataFrame(vol_data)
+            # IV vs RV
+            if iv_data:
+                st.subheader("Implied vs. Realized Volatility")
+                vol_data = {
+                    "Metric": ["Current ATM IV", "30d RV", "60d RV", "90d RV"],
+                    "Value": [iv_data["current_iv"], iv_data["rv_30"],
+                              iv_data["rv_60"], iv_data["rv_90"]],
+                }
+                vol_df = pd.DataFrame(vol_data)
 
-            fig3, ax3 = plt.subplots(figsize=(8, 4), facecolor=CHART_BG_COLOR)
-            ax3.set_facecolor(CHART_FACE_COLOR)
-            colors = ["#ff7f0e", "#1f77b4", "#1f77b4", "#1f77b4"]
-            bars = ax3.barh(vol_df["Metric"], vol_df["Value"] * 100, color=colors)
-            ax3.set_xlabel("Volatility (%)", color='white')
-            ax3.set_title(f"{symbol} — IV vs. Realized Volatility", color='white')
-            ax3.tick_params(colors='white')
-            for bar, val in zip(bars, vol_df["Value"]):
-                ax3.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2,
-                         f"{val:.1%}", va="center", fontsize=10, color='white')
-            ax3.grid(True, alpha=0.3, axis="x")
-            fig3.tight_layout()
-            st.pyplot(fig3)
-            plt.close(fig3)
+                fig3, ax3 = plt.subplots(figsize=(8, 4), facecolor=CHART_BG_COLOR)
+                ax3.set_facecolor(CHART_FACE_COLOR)
+                colors = ["#ff7f0e", "#1f77b4", "#1f77b4", "#1f77b4"]
+                bars = ax3.barh(vol_df["Metric"], vol_df["Value"] * 100, color=colors)
+                ax3.set_xlabel("Volatility (%)", color='white')
+                ax3.set_title(f"{symbol} — IV vs. Realized Volatility", color='white')
+                ax3.tick_params(colors='white')
+                for bar, val in zip(bars, vol_df["Value"]):
+                    ax3.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2,
+                             f"{val:.1%}", va="center", fontsize=10, color='white')
+                ax3.grid(True, alpha=0.3, axis="x")
+                fig3.tight_layout()
+                st.pyplot(fig3)
+                plt.close(fig3)
 
-            premium_ratio = iv_data["current_iv"] / iv_data["rv_30"] if iv_data["rv_30"] > 0 else 1
-            if premium_ratio > 1.3:
-                st.success(
-                    f"**IV/RV Ratio: {premium_ratio:.2f}x** — Options priced for "
-                    f"{(premium_ratio - 1) * 100:.0f}% more movement than realized. "
-                    f"Edge in selling premium.")
-            elif premium_ratio < 0.8:
-                st.success(
-                    f"**IV/RV Ratio: {premium_ratio:.2f}x** — Options cheap vs. "
-                    f"actual movement. Edge in buying premium.")
-            else:
-                st.info(f"**IV/RV Ratio: {premium_ratio:.2f}x** — IV and RV roughly in line.")
+                premium_ratio = iv_data["current_iv"] / iv_data["rv_30"] if iv_data["rv_30"] > 0 else 1
+                if premium_ratio > 1.3:
+                    st.success(
+                        f"**IV/RV Ratio: {premium_ratio:.2f}x** — Options priced for "
+                        f"{(premium_ratio - 1) * 100:.0f}% more movement than realized. "
+                        f"Edge in selling premium.")
+                elif premium_ratio < 0.8:
+                    st.success(
+                        f"**IV/RV Ratio: {premium_ratio:.2f}x** — Options cheap vs. "
+                        f"actual movement. Edge in buying premium.")
+                else:
+                    st.info(f"**IV/RV Ratio: {premium_ratio:.2f}x** — IV and RV roughly in line.")
+
 
 
 # ═════════════════════════════════════════════
