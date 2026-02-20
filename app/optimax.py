@@ -4187,6 +4187,10 @@ with tab_options:
 
     st.markdown("---")
 
+    if not expirations:
+        st.warning("No options expirations available. Enter a valid ticker symbol in Options Trading settings above.")
+        st.stop()
+
     # ── Expiration Selector ──
     selected_idx = st.selectbox(
         "Expiration Date",
