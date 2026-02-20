@@ -3512,30 +3512,63 @@ with tab_calendar:
 
     with st.spinner("Loading market news..."):
         # Fetch news from major market tickers to get broad financial news
-        market_tickers = ["SPY", "QQQ", "DIA", "IWM", "^GSPC"]
+        import yfinance as yf
+        market_tickers = ["SPY", "QQQ", "DIA", "IWM"]
         market_news = []
         seen_titles = set()
         for mt in market_tickers:
             try:
-                mt_news = get_stock_news(mt, limit=8)
-                for n in mt_news:
-                    # Deduplicate by title
-                    if n.title not in seen_titles:
-                        seen_titles.add(n.title)
-                        # Relabel symbol as source category
-                        source_map = {"SPY": "S&P 500", "QQQ": "Nasdaq", "DIA": "Dow Jones", "IWM": "Russell 2000", "^GSPC": "Markets"}
-                        n.symbol = source_map.get(mt, "Markets")
-                        market_news.append(n)
+                t = yf.Ticker(mt)
+                raw_news = t.news or []
+                for article in raw_news[:8]:
+                    try:
+                        content = article.get("content", article)
+                        title = content.get("title", "")
+                        if not title or title in seen_titles:
+                            continue
+                        seen_titles.add(title)
+
+                        provider = content.get("provider", {})
+                        publisher = provider.get("displayName", "") if isinstance(provider, dict) else ""
+
+                        link = ""
+                        if "canonicalUrl" in content and isinstance(content["canonicalUrl"], dict):
+                            link = content["canonicalUrl"].get("url", "")
+                        elif "clickThroughUrl" in content and isinstance(content["clickThroughUrl"], dict):
+                            link = content["clickThroughUrl"].get("url", "")
+                        elif "link" in content:
+                            link = content.get("link", "")
+
+                        pub_date_str = content.get("pubDate", "")
+                        if pub_date_str:
+                            try:
+                                pub_time = datetime.fromisoformat(pub_date_str.replace("Z", "+00:00")).replace(tzinfo=None)
+                            except Exception:
+                                pub_time = datetime.now()
+                        else:
+                            pub_time = datetime.fromtimestamp(article.get("providerPublishTime", 0)) if article.get("providerPublishTime") else datetime.now()
+
+                        if title and link:
+                            source_map = {"SPY": "S&P 500", "QQQ": "Nasdaq", "DIA": "Dow Jones", "IWM": "Russell 2000"}
+                            market_news.append({
+                                "title": title,
+                                "publisher": publisher,
+                                "link": link,
+                                "published": pub_time,
+                                "symbol": source_map.get(mt, "Markets"),
+                            })
+                    except Exception:
+                        continue
             except Exception:
                 continue
-        market_news.sort(key=lambda x: x.published, reverse=True)
+        market_news.sort(key=lambda x: x["published"], reverse=True)
 
     if market_news:
         # Show today's date
         st.markdown(f"**{datetime.now().strftime('%A, %B %d, %Y')}**")
 
         for i, news in enumerate(market_news[:15]):
-            time_ago = datetime.now() - news.published
+            time_ago = datetime.now() - news["published"]
             if time_ago.days > 0:
                 time_str = f"{time_ago.days}d ago"
             elif time_ago.seconds > 3600:
@@ -3545,17 +3578,17 @@ with tab_calendar:
 
             # Color-code by market category
             cat_colors = {"S&P 500": "#28a745", "Nasdaq": "#6C63FF", "Dow Jones": "#ff6b6b", "Russell 2000": "#ffa600", "Markets": "#4da6ff"}
-            badge_color = cat_colors.get(news.symbol, "#4da6ff")
+            badge_color = cat_colors.get(news["symbol"], "#4da6ff")
 
             st.markdown(
                 f"""
                 <div style='padding: 12px; margin: 8px 0; background-color: {CHART_FACE_COLOR}; border-radius: 8px; border-left: 4px solid {badge_color};'>
                     <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;'>
-                        <span style='background-color: {badge_color}; padding: 3px 10px; border-radius: 4px; font-size: 0.85em; font-weight: bold; color: white;'>{news.symbol}</span>
-                        <span style='color: #888; font-size: 0.8em;'>{time_str} • {news.publisher}</span>
+                        <span style='background-color: {badge_color}; padding: 3px 10px; border-radius: 4px; font-size: 0.85em; font-weight: bold; color: white;'>{news["symbol"]}</span>
+                        <span style='color: #888; font-size: 0.8em;'>{time_str} • {news["publisher"]}</span>
                     </div>
-                    <a href='{news.link}' target='_blank' style='color: #4da6ff; text-decoration: none; font-weight: 500; font-size: 1.05em; display: block;'>
-                        {news.title} ↗
+                    <a href='{news["link"]}' target='_blank' style='color: #4da6ff; text-decoration: none; font-weight: 500; font-size: 1.05em; display: block;'>
+                        {news["title"]} ↗
                     </a>
                 </div>
                 """,
@@ -4625,19 +4658,19 @@ with tab_valuation:
 
         try:
             import yfinance as yf
-            ticker = yf.Ticker(val_symbol)
-            info = ticker.info
-            financials = ticker.financials
-            balance_sheet = ticker.balance_sheet
-            cash_flow = ticker.cashflow
+            val_ticker = yf.Ticker(val_symbol)
+            val_info = val_ticker.info
+            financials = val_ticker.financials
+            balance_sheet = val_ticker.balance_sheet
+            cash_flow = val_ticker.cashflow
             # Quarterly statements
-            quarterly_financials = ticker.quarterly_financials
-            quarterly_balance_sheet = ticker.quarterly_balance_sheet
-            quarterly_cashflow = ticker.quarterly_cashflow
+            quarterly_financials = val_ticker.quarterly_financials
+            quarterly_balance_sheet = val_ticker.quarterly_balance_sheet
+            quarterly_cashflow = val_ticker.quarterly_cashflow
 
             loading_placeholder.empty()
 
-            if not info.get('currentPrice'):
+            if not val_info.get('currentPrice'):
                 # Suggest common corrections
                 common_typos = {"APPL": "AAPL", "GOGL": "GOOGL", "AMZN ": "AMZN", "TSLA ": "TSLA", "MSFT ": "MSFT"}
                 suggestion = common_typos.get(val_symbol, "")
@@ -4655,50 +4688,50 @@ with tab_valuation:
                     st.error(f"Could not find data for **{val_symbol}**. Check the ticker symbol and try again.")
             else:
                 # Extract key data
-                current_price = info.get('currentPrice', 0)
-                market_cap = info.get('marketCap', 0)
-                enterprise_value = info.get('enterpriseValue', 0)
-                shares_outstanding = info.get('sharesOutstanding', 0)
+                current_price = val_info.get('currentPrice', 0)
+                market_cap = val_info.get('marketCap', 0)
+                enterprise_value = val_info.get('enterpriseValue', 0)
+                shares_outstanding = val_info.get('sharesOutstanding', 0)
 
                 # Valuation metrics
-                pe_ratio = info.get('trailingPE', 0) or 0
-                forward_pe = info.get('forwardPE', 0) or 0
-                peg_ratio = info.get('pegRatio', 0) or 0
-                pb_ratio = info.get('priceToBook', 0) or 0
-                ps_ratio = info.get('priceToSalesTrailing12Months', 0) or 0
-                ev_ebitda = info.get('enterpriseToEbitda', 0) or 0
-                ev_revenue = info.get('enterpriseToRevenue', 0) or 0
+                pe_ratio = val_info.get('trailingPE', 0) or 0
+                forward_pe = val_info.get('forwardPE', 0) or 0
+                peg_ratio = val_info.get('pegRatio', 0) or 0
+                pb_ratio = val_info.get('priceToBook', 0) or 0
+                ps_ratio = val_info.get('priceToSalesTrailing12Months', 0) or 0
+                ev_ebitda = val_info.get('enterpriseToEbitda', 0) or 0
+                ev_revenue = val_info.get('enterpriseToRevenue', 0) or 0
 
                 # Profitability
-                profit_margin = info.get('profitMargins', 0) or 0
-                operating_margin = info.get('operatingMargins', 0) or 0
-                gross_margin = info.get('grossMargins', 0) or 0
-                roe = info.get('returnOnEquity', 0) or 0
-                roa = info.get('returnOnAssets', 0) or 0
+                profit_margin = val_info.get('profitMargins', 0) or 0
+                operating_margin = val_info.get('operatingMargins', 0) or 0
+                gross_margin = val_info.get('grossMargins', 0) or 0
+                roe = val_info.get('returnOnEquity', 0) or 0
+                roa = val_info.get('returnOnAssets', 0) or 0
 
                 # Growth
-                revenue_growth = info.get('revenueGrowth', 0) or 0
-                earnings_growth = info.get('earningsGrowth', 0) or 0
+                revenue_growth = val_info.get('revenueGrowth', 0) or 0
+                earnings_growth = val_info.get('earningsGrowth', 0) or 0
 
                 # Financial health
-                current_ratio = info.get('currentRatio', 0) or 0
-                debt_to_equity = info.get('debtToEquity', 0) or 0
-                total_debt = info.get('totalDebt', 0) or 0
-                total_cash = info.get('totalCash', 0) or 0
-                free_cash_flow = info.get('freeCashflow', 0) or 0
+                current_ratio = val_info.get('currentRatio', 0) or 0
+                debt_to_equity = val_info.get('debtToEquity', 0) or 0
+                total_debt = val_info.get('totalDebt', 0) or 0
+                total_cash = val_info.get('totalCash', 0) or 0
+                free_cash_flow = val_info.get('freeCashflow', 0) or 0
 
                 # EPS data
-                trailing_eps = info.get('trailingEps', 0) or 0
-                forward_eps = info.get('forwardEps', 0) or 0
+                trailing_eps = val_info.get('trailingEps', 0) or 0
+                forward_eps = val_info.get('forwardEps', 0) or 0
 
                 # EBITDA
-                ebitda = info.get('ebitda', 0) or 0
-                total_revenue = info.get('totalRevenue', 0) or 0
+                ebitda = val_info.get('ebitda', 0) or 0
+                total_revenue = val_info.get('totalRevenue', 0) or 0
 
                 # Company info
-                company_name = info.get('shortName', val_symbol)
-                sector = info.get('sector', 'N/A')
-                industry = info.get('industry', 'N/A')
+                company_name = val_info.get('shortName', val_symbol)
+                sector = val_info.get('sector', 'N/A')
+                industry = val_info.get('industry', 'N/A')
 
                 # ═══════════════════════════════════════════
                 # HEADER - Company Overview
@@ -4716,7 +4749,7 @@ with tab_valuation:
                 with overview_cols[3]:
                     st.metric("EV/EBITDA", f"{ev_ebitda:.1f}" if ev_ebitda else "N/A")
                 with overview_cols[4]:
-                    div_yield = info.get('trailingAnnualDividendYield', 0) or 0
+                    div_yield = val_info.get('trailingAnnualDividendYield', 0) or 0
                     st.metric("Div Yield", f"{div_yield*100:.2f}%")
 
                 st.markdown("---")
@@ -4737,7 +4770,7 @@ with tab_valuation:
                     st.markdown("### Financial Statements")
 
                     # Detect fiscal year end
-                    fiscal_year_end = info.get('lastFiscalYearEnd', None)
+                    fiscal_year_end = val_info.get('lastFiscalYearEnd', None)
                     fy_month_name = ""
                     if fiscal_year_end:
                         try:
@@ -4925,7 +4958,7 @@ with tab_valuation:
                             # ═══════════════════════════════════════════
                             # AUTO-CALCULATE WACC
                             # ═══════════════════════════════════════════
-                            beta_val = info.get('beta', 1.0) or 1.0
+                            beta_val = val_info.get('beta', 1.0) or 1.0
                             risk_free = 0.043  # ~10Y Treasury yield
                             market_premium = 0.055  # Historical equity risk premium
                             cost_of_equity = risk_free + beta_val * market_premium
@@ -4940,7 +4973,7 @@ with tab_valuation:
                                     break
 
                             cost_of_debt_pretax = (interest_expense / total_debt) if total_debt > 0 else 0.04
-                            tax_rate_est = info.get('effectiveTaxRate', 0.21) or 0.21
+                            tax_rate_est = val_info.get('effectiveTaxRate', 0.21) or 0.21
                             if isinstance(tax_rate_est, (int, float)) and tax_rate_est > 1:
                                 tax_rate_est = tax_rate_est / 100
                             cost_of_debt = cost_of_debt_pretax * (1 - tax_rate_est)
@@ -5163,7 +5196,7 @@ with tab_valuation:
 
                     with mult_cols[3]:
                         st.metric("EV/EBITDA", f"{ev_ebitda:.1f}x" if ev_ebitda else "N/A")
-                        div_yield_val = info.get('trailingAnnualDividendYield', 0) or 0
+                        div_yield_val = val_info.get('trailingAnnualDividendYield', 0) or 0
                         st.metric("Dividend Yield", f"{div_yield_val*100:.2f}%" if div_yield_val else "N/A")
 
                     st.markdown("---")
@@ -5200,7 +5233,7 @@ with tab_valuation:
                         valuation_rows.append({"Method": "EV/Revenue", "Multiple": f"{ev_revenue:.1f}x", "Basis": f"Revenue ${total_revenue/1e9:.2f}B", "Implied Price": f"${ev_rev_price:.2f}", "vs Current": f"{((ev_rev_price/current_price)-1)*100:+.1f}%"})
 
                     # P/B implied
-                    book_value_per_share = info.get('bookValue', 0) or 0
+                    book_value_per_share = val_info.get('bookValue', 0) or 0
                     if pb_ratio and pb_ratio > 0 and book_value_per_share and book_value_per_share > 0:
                         pb_implied = book_value_per_share * pb_ratio
                         valuation_rows.append({"Method": "P/B Ratio", "Multiple": f"{pb_ratio:.1f}x", "Basis": f"Book Value ${book_value_per_share:.2f}", "Implied Price": f"${pb_implied:.2f}", "vs Current": f"{((pb_implied/current_price)-1)*100:+.1f}%"})
@@ -5324,17 +5357,17 @@ with tab_valuation:
 
                     with growth_cols[2]:
                         # 5-year revenue CAGR if available
-                        five_yr_growth = info.get('revenueGrowth', 0)
+                        five_yr_growth = val_info.get('revenueGrowth', 0)
                         st.metric("5Y Revenue CAGR", f"{five_yr_growth*100:.1f}%" if five_yr_growth else "N/A")
 
                     st.markdown("---")
 
                     # Analyst Ratings
                     st.markdown("#### Analyst Estimates")
-                    target_high = info.get('targetHighPrice', 0)
-                    target_low = info.get('targetLowPrice', 0)
-                    target_mean = info.get('targetMeanPrice', 0)
-                    recommendation = info.get('recommendationKey', 'N/A')
+                    target_high = val_info.get('targetHighPrice', 0)
+                    target_low = val_info.get('targetLowPrice', 0)
+                    target_mean = val_info.get('targetMeanPrice', 0)
+                    recommendation = val_info.get('recommendationKey', 'N/A')
 
                     if target_mean:
                         analyst_cols = st.columns(4)
@@ -5404,7 +5437,7 @@ with tab_valuation:
                                  delta_color=nd_color)
 
                     # Interest coverage
-                    interest_expense = info.get('interestExpense', 0) or 0
+                    interest_expense = val_info.get('interestExpense', 0) or 0
                     if ebitda and interest_expense and interest_expense > 0:
                         interest_coverage = ebitda / interest_expense
                         st.markdown("---")
