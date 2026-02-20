@@ -3510,52 +3510,40 @@ with tab_calendar:
     st.markdown("### Today's Finance News")
     st.markdown(f"**{datetime.now().strftime('%A, %B %d, %Y')}**")
 
-    try:
+    @st.cache_data(ttl=900, show_spinner=False)
+    def fetch_market_news():
+        """Fetch market news from major tickers. Cached for 15 minutes."""
         import yfinance as yf
-        market_news = []
-        seen_titles = set()
+        results = []
+        seen = set()
         for mt in ["SPY", "QQQ", "DIA"]:
             try:
                 t = yf.Ticker(mt)
-                raw_news = t.news
-                if not raw_news:
+                raw = t.news
+                if not raw:
                     continue
-                for article in raw_news[:6]:
+                for article in raw[:6]:
                     try:
-                        # Handle both old and new yfinance news formats
                         if isinstance(article, dict):
                             content = article.get("content", article)
                         else:
                             content = article
-
                         title = content.get("title", "") if isinstance(content, dict) else getattr(content, "title", "")
-                        if not title or title in seen_titles:
+                        if not title or title in seen:
                             continue
-                        seen_titles.add(title)
-
-                        # Extract publisher
+                        seen.add(title)
                         if isinstance(content, dict):
-                            provider = content.get("provider", {})
-                            publisher = provider.get("displayName", "") if isinstance(provider, dict) else str(provider)
-                        else:
-                            publisher = getattr(content, "publisher", "")
-
-                        # Extract link
-                        link = ""
-                        if isinstance(content, dict):
+                            prov = content.get("provider", {})
+                            publisher = prov.get("displayName", "") if isinstance(prov, dict) else str(prov)
+                            link = ""
                             if "canonicalUrl" in content and isinstance(content["canonicalUrl"], dict):
                                 link = content["canonicalUrl"].get("url", "")
                             elif "clickThroughUrl" in content and isinstance(content["clickThroughUrl"], dict):
                                 link = content["clickThroughUrl"].get("url", "")
                             else:
                                 link = content.get("link", content.get("url", ""))
-                        else:
-                            link = getattr(content, "link", getattr(content, "url", ""))
-
-                        # Extract publish time
-                        pub_time = datetime.now()
-                        if isinstance(content, dict):
                             pub_str = content.get("pubDate", "")
+                            pub_time = datetime.now()
                             if pub_str:
                                 try:
                                     pub_time = datetime.fromisoformat(str(pub_str).replace("Z", "+00:00")).replace(tzinfo=None)
@@ -3566,48 +3554,53 @@ with tab_calendar:
                                     pub_time = datetime.fromtimestamp(article["providerPublishTime"])
                                 except Exception:
                                     pass
-
-                        if title:
-                            source_map = {"SPY": "S&P 500", "QQQ": "Nasdaq", "DIA": "Dow Jones"}
-                            market_news.append({
-                                "title": title,
-                                "publisher": publisher or "Financial News",
-                                "link": link or "#",
-                                "published": pub_time,
-                                "symbol": source_map.get(mt, "Markets"),
-                            })
+                        else:
+                            publisher = getattr(content, "publisher", "")
+                            link = getattr(content, "link", getattr(content, "url", ""))
+                            pub_time = datetime.now()
+                        source_map = {"SPY": "S&P 500", "QQQ": "Nasdaq", "DIA": "Dow Jones"}
+                        results.append({
+                            "title": title,
+                            "publisher": publisher or "Financial News",
+                            "link": link or "#",
+                            "published": pub_time,
+                            "symbol": source_map.get(mt, "Markets"),
+                        })
                     except Exception:
                         continue
             except Exception:
                 continue
+        results.sort(key=lambda x: x["published"], reverse=True)
+        return results
 
-        market_news.sort(key=lambda x: x["published"], reverse=True)
+    with st.spinner("Loading market news..."):
+        try:
+            market_news = fetch_market_news()
+        except Exception as e:
+            market_news = []
+            st.error(f"Error loading news: {str(e)}")
 
-        if market_news:
-            for news in market_news[:12]:
-                time_ago = datetime.now() - news["published"]
-                if time_ago.days > 0:
-                    time_str = f"{time_ago.days}d ago"
-                elif time_ago.seconds > 3600:
-                    time_str = f"{time_ago.seconds // 3600}h ago"
-                else:
-                    time_str = f"{max(1, time_ago.seconds // 60)}m ago"
-
-                cat_colors = {"S&P 500": "#28a745", "Nasdaq": "#6C63FF", "Dow Jones": "#ff6b6b"}
-                badge_color = cat_colors.get(news["symbol"], "#4da6ff")
-
-                st.markdown(
-                    f"<div style='padding:12px;margin:8px 0;background:{CHART_FACE_COLOR};border-radius:8px;border-left:4px solid {badge_color};'>"
-                    f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;'>"
-                    f"<span style='background:{badge_color};padding:3px 10px;border-radius:4px;font-size:0.85em;font-weight:bold;color:white;'>{news['symbol']}</span>"
-                    f"<span style='color:#888;font-size:0.8em;'>{time_str} • {news['publisher']}</span></div>"
-                    f"<a href='{news['link']}' target='_blank' style='color:#4da6ff;text-decoration:none;font-weight:500;font-size:1.05em;'>{news['title']} ↗</a></div>",
-                    unsafe_allow_html=True
-                )
-        else:
-            st.info("No market news available at this time. Try refreshing the page.")
-    except Exception as e:
-        st.error(f"Error loading news: {str(e)}")
+    if market_news:
+        for news in market_news[:12]:
+            time_ago = datetime.now() - news["published"]
+            if time_ago.days > 0:
+                time_str = f"{time_ago.days}d ago"
+            elif time_ago.seconds > 3600:
+                time_str = f"{time_ago.seconds // 3600}h ago"
+            else:
+                time_str = f"{max(1, time_ago.seconds // 60)}m ago"
+            cat_colors = {"S&P 500": "#28a745", "Nasdaq": "#6C63FF", "Dow Jones": "#ff6b6b"}
+            badge_color = cat_colors.get(news["symbol"], "#4da6ff")
+            st.markdown(
+                f"<div style='padding:12px;margin:8px 0;background:{CHART_FACE_COLOR};border-radius:8px;border-left:4px solid {badge_color};'>"
+                f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;'>"
+                f"<span style='background:{badge_color};padding:3px 10px;border-radius:4px;font-size:0.85em;font-weight:bold;color:white;'>{news['symbol']}</span>"
+                f"<span style='color:#888;font-size:0.8em;'>{time_str} • {news['publisher']}</span></div>"
+                f"<a href='{news['link']}' target='_blank' style='color:#4da6ff;text-decoration:none;font-weight:500;font-size:1.05em;'>{news['title']} ↗</a></div>",
+                unsafe_allow_html=True
+            )
+    elif not market_news:
+        st.info("No market news available at this time. Try refreshing the page.")
 
     st.markdown("---")
 
@@ -4660,12 +4653,13 @@ with tab_valuation:
     st.caption("DCF, P/E, EV/EBITDA valuations with comprehensive fundamental metrics")
 
     # Stock input
-    val_col1, val_col2 = st.columns([1, 3])
-    with val_col1:
-        val_symbol = st.text_input("Enter Ticker", value="AAPL", key="val_ticker").upper().strip()
-    with val_col2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        run_valuation = st.button("Run Valuation Analysis", key="run_val", type="primary")
+    with st.form("valuation_form"):
+        val_col1, val_col2 = st.columns([2, 1])
+        with val_col1:
+            val_symbol = st.text_input("Enter Ticker Symbol", value="AAPL", key="val_ticker").upper().strip()
+        with val_col2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            run_valuation = st.form_submit_button("Run Valuation Analysis", type="primary")
 
     if val_symbol and run_valuation:
         # Show loading animation
@@ -5510,8 +5504,15 @@ with tab_valuation:
             loading_placeholder.empty()
             st.error(f"Error analyzing {val_symbol}: {str(e)}")
 
-    elif val_symbol and not run_valuation:
-        st.info("👆 Click 'Run Valuation Analysis' to analyze the stock")
+    elif not run_valuation:
+        st.markdown("---")
+        st.markdown(
+            "<div style='text-align:center;padding:60px 20px;'>"
+            "<h3 style='color:#6C63FF;'>Enter a ticker symbol and click Run Valuation Analysis</h3>"
+            "<p style='color:#888;font-size:1.1em;'>Get financial statements, DCF valuation, relative valuation, and more</p>"
+            "</div>",
+            unsafe_allow_html=True
+        )
 
 
 # ═════════════════════════════════════════════
