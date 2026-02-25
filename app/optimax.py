@@ -71,6 +71,16 @@ from pathlib import Path
 load_dotenv(Path(__file__).parent / ".env")
 
 # ─────────────────────────────────────────────
+# Cached Entropy (avoid rate limits on yfinance)
+# ─────────────────────────────────────────────
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_entropy():
+    """Cache entropy computation for 1 hour to avoid yfinance rate limits."""
+    return compute_market_entropy(lookback_days=90)
+
+
+# ─────────────────────────────────────────────
 # Delta-Based Probability of Profit
 # ─────────────────────────────────────────────
 
@@ -784,7 +794,7 @@ if symbol:
 
         with st.spinner("Loading options data..."):
             iv_data = compute_iv_percentile(symbol)
-            entropy_signal = compute_market_entropy(lookback_days=90)
+            entropy_signal = _cached_entropy()
 
         if iv_data:
             iv_percentile = iv_data["iv_percentile"]
@@ -3584,19 +3594,29 @@ with tab_calendar:
         import yfinance as yf
         results = []
         seen = set()
+        source_map = {"SPY": "S&P 500", "QQQ": "Nasdaq", "DIA": "Dow Jones"}
         for mt in ["SPY", "QQQ", "DIA"]:
             try:
                 t = yf.Ticker(mt)
-                raw = t.news
+                try:
+                    raw = t.news
+                except Exception:
+                    raw = None
                 if not raw:
                     continue
-                for article in raw[:6]:
+                # Handle both list and dict formats from different yfinance versions
+                articles = raw if isinstance(raw, list) else raw.get("news", raw.get("items", []))
+                for article in articles[:6]:
                     try:
                         if isinstance(article, dict):
+                            # New yfinance format: article has "content" wrapper
                             content = article.get("content", article)
                         else:
                             content = article
-                        title = content.get("title", "") if isinstance(content, dict) else getattr(content, "title", "")
+                        if isinstance(content, dict):
+                            title = content.get("title", "")
+                        else:
+                            title = getattr(content, "title", "")
                         if not title or title in seen:
                             continue
                         seen.add(title)
@@ -3626,7 +3646,6 @@ with tab_calendar:
                             publisher = getattr(content, "publisher", "")
                             link = getattr(content, "link", getattr(content, "url", ""))
                             pub_time = datetime.now()
-                        source_map = {"SPY": "S&P 500", "QQQ": "Nasdaq", "DIA": "Dow Jones"}
                         results.append({
                             "title": title,
                             "publisher": publisher or "Financial News",
@@ -4736,22 +4755,35 @@ with tab_valuation:
             st.markdown("<br>", unsafe_allow_html=True)
             run_valuation = st.form_submit_button("Run Valuation Analysis", type="primary")
 
+    @st.cache_data(ttl=600, show_spinner=False)
+    def _fetch_valuation_data(sym):
+        """Fetch all valuation data for a ticker. Cached 10 min to avoid rate limits."""
+        import yfinance as yf
+        t = yf.Ticker(sym)
+        return {
+            "info": t.info,
+            "financials": t.financials,
+            "balance_sheet": t.balance_sheet,
+            "cashflow": t.cashflow,
+            "quarterly_financials": t.quarterly_financials,
+            "quarterly_balance_sheet": t.quarterly_balance_sheet,
+            "quarterly_cashflow": t.quarterly_cashflow,
+        }
+
     if val_symbol and run_valuation:
         # Show loading animation
         loading_placeholder = st.empty()
         loading_placeholder.markdown(show_dollar_spinner(f"Analyzing {val_symbol}..."), unsafe_allow_html=True)
 
         try:
-            import yfinance as yf
-            val_ticker = yf.Ticker(val_symbol)
-            val_info = val_ticker.info
-            financials = val_ticker.financials
-            balance_sheet = val_ticker.balance_sheet
-            cash_flow = val_ticker.cashflow
-            # Quarterly statements
-            quarterly_financials = val_ticker.quarterly_financials
-            quarterly_balance_sheet = val_ticker.quarterly_balance_sheet
-            quarterly_cashflow = val_ticker.quarterly_cashflow
+            val_data = _fetch_valuation_data(val_symbol)
+            val_info = val_data["info"]
+            financials = val_data["financials"]
+            balance_sheet = val_data["balance_sheet"]
+            cash_flow = val_data["cashflow"]
+            quarterly_financials = val_data["quarterly_financials"]
+            quarterly_balance_sheet = val_data["quarterly_balance_sheet"]
+            quarterly_cashflow = val_data["quarterly_cashflow"]
 
             loading_placeholder.empty()
 

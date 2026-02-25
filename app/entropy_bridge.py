@@ -9,6 +9,7 @@ and continuous functions for smooth regime transitions.
 import numpy as np
 import pandas as pd
 import yfinance as yf
+import time
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -95,16 +96,24 @@ def fetch_live_sector_weights() -> Optional[np.ndarray]:
     """
     caps = {}
     etf_list = list(SECTOR_ETFS.keys())
-    for etf in etf_list:
+    # Batch download to minimize API calls
+    try:
+        tickers_str = " ".join(etf_list)
+        data = yf.download(tickers_str, period="1d", progress=False)
+        # Use latest closing prices × shares as proxy, or try info
+    except Exception:
+        pass
+    for i, etf in enumerate(etf_list):
         try:
             ticker = yf.Ticker(etf)
-            # Try fast_info first, fall back to info
             try:
                 cap = ticker.fast_info['marketCap']
             except (KeyError, AttributeError):
                 cap = ticker.info.get('totalAssets') or ticker.info.get('marketCap')
             if cap and cap > 0:
                 caps[etf] = float(cap)
+            if i % 4 == 3:
+                time.sleep(0.3)  # gentle rate limiting
         except Exception:
             continue
 
@@ -187,24 +196,30 @@ def compute_market_entropy(lookback_days: int = 90) -> Optional[EntropySignal]:
     live_weights = fetch_live_sector_weights()
     using_live_caps = live_weights is not None
 
-    # Fetch sector ETF price history for trend analysis
-    sector_prices = {}
-    for etf in SECTOR_ETFS:
-        try:
-            ticker = yf.Ticker(etf)
-            hist = ticker.history(
-                start=start.strftime("%Y-%m-%d"),
-                end=end.strftime("%Y-%m-%d"),
-            )
-            if not hist.empty:
-                sector_prices[etf] = hist["Close"]
-        except Exception:
-            continue
+    # Fetch sector ETF price history in a single batch call
+    etf_symbols = list(SECTOR_ETFS.keys())
+    try:
+        batch_data = yf.download(
+            etf_symbols,
+            start=start.strftime("%Y-%m-%d"),
+            end=end.strftime("%Y-%m-%d"),
+            progress=False,
+        )
+        # yf.download returns MultiIndex columns: (Price, Ticker)
+        if "Close" in batch_data.columns or hasattr(batch_data.columns, 'levels'):
+            try:
+                prices_df = batch_data["Close"]
+            except KeyError:
+                prices_df = batch_data
+        else:
+            prices_df = batch_data
+    except Exception:
+        prices_df = pd.DataFrame()
 
-    if len(sector_prices) < 8:
+    if prices_df.empty or len(prices_df.columns) < 8:
         return None
 
-    prices_df = pd.DataFrame(sector_prices).dropna()
+    prices_df = prices_df.dropna()
     if len(prices_df) < 30:
         return None
 
