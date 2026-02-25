@@ -97,24 +97,31 @@ def bs_greeks(S, K, T, r, sigma, option_type="call"):
 
 def get_ticker_info(symbol):
     """Get basic ticker info: spot price, name, etc.
-    Uses fast_info to avoid expensive ticker.info calls.
+    Uses fast_info only — avoids expensive ticker.info calls that trigger rate limits.
     Returns a serializable dict (no yf.Ticker object) for caching."""
+    import time as _time
     ticker = yf.Ticker(symbol)
-    try:
-        spot = ticker.fast_info["lastPrice"]
-    except Exception:
-        spot = None
-    # Only call ticker.info if fast_info failed for spot
-    if spot is None:
+    spot = None
+    name = symbol
+
+    # Try fast_info (lightweight, rarely rate-limited)
+    for attempt in range(3):
+        try:
+            spot = ticker.fast_info["lastPrice"]
+            if spot and spot > 0:
+                break
+        except Exception:
+            _time.sleep(0.5 * (attempt + 1))
+
+    # Only fall back to ticker.info if fast_info totally failed
+    if not spot or spot <= 0:
         try:
             info = ticker.info
             spot = info.get("currentPrice") or info.get("regularMarketPrice") or 0
             name = info.get("shortName", symbol)
         except Exception:
             spot = 0
-            name = symbol
-    else:
-        name = symbol
+
     return {"symbol": symbol, "spot": spot, "name": name}
 
 
@@ -203,20 +210,31 @@ def get_enriched_chain(symbol, expiration, risk_free_rate=0.045, spot=None, tick
 def compute_iv_percentile(symbol, lookback_days=90):
     """
     Compute where current IV sits vs. historical realized volatility.
+    Uses yf.download for history (batch-friendly) to minimize rate limit risk.
 
     Returns dict with:
         current_iv (avg ATM IV), historical_rv, iv_percentile, iv_rank_label
     """
-    ticker = yf.Ticker(symbol)
-
-    # Get historical prices for realized vol
+    # Use yf.download instead of ticker.history — less rate-limited
     end = datetime.now()
     start = end - timedelta(days=lookback_days + 30)
-    hist = ticker.history(start=start.strftime("%Y-%m-%d"),
-                          end=end.strftime("%Y-%m-%d"))
+
+    try:
+        hist = yf.download(
+            symbol,
+            start=start.strftime("%Y-%m-%d"),
+            end=end.strftime("%Y-%m-%d"),
+            progress=False,
+        )
+    except Exception:
+        return None
 
     if hist.empty or len(hist) < 20:
         return None
+
+    # Handle MultiIndex columns from yf.download
+    if isinstance(hist.columns, pd.MultiIndex):
+        hist.columns = hist.columns.get_level_values(0)
 
     # Realized volatility (annualized std of log returns)
     log_returns = np.log(hist["Close"] / hist["Close"].shift(1)).dropna()
@@ -229,9 +247,23 @@ def compute_iv_percentile(symbol, lookback_days=90):
     rolling_rv = rolling_rv.dropna()
 
     # Get current ATM IV from nearest expiration
-    expirations = list(ticker.options)
+    ticker = yf.Ticker(symbol)
+    try:
+        expirations = list(ticker.options)
+    except Exception:
+        expirations = []
     if not expirations:
-        return None
+        # Return RV-only data if options aren't available
+        return {
+            "current_iv": float(rv_30),
+            "rv_30": float(rv_30),
+            "rv_60": float(rv_60),
+            "rv_90": float(rv_90),
+            "iv_percentile": 50.0,
+            "iv_rank_label": "MODERATE",
+            "lookback_days": lookback_days,
+            "expiration_used": "N/A",
+        }
 
     # Pick expiration closest to 30 DTE
     target_dte = 30
@@ -241,7 +273,10 @@ def compute_iv_percentile(symbol, lookback_days=90):
 
     try:
         chain = ticker.option_chain(best_exp)
-        spot = ticker.fast_info["lastPrice"]
+        try:
+            spot = ticker.fast_info["lastPrice"]
+        except Exception:
+            spot = float(hist["Close"].iloc[-1])
 
         # ATM calls (within 3% of spot)
         atm_calls = chain.calls[
@@ -258,7 +293,7 @@ def compute_iv_percentile(symbol, lookback_days=90):
 
     # IV percentile: where does current IV sit vs. rolling RV distribution
     if len(rolling_rv) > 0:
-        iv_percentile = (rolling_rv < current_iv).mean() * 100
+        iv_percentile = float((rolling_rv < current_iv).mean() * 100)
     else:
         iv_percentile = 50.0
 
@@ -271,10 +306,10 @@ def compute_iv_percentile(symbol, lookback_days=90):
         label = "MODERATE"
 
     return {
-        "current_iv": current_iv,
-        "rv_30": rv_30,
-        "rv_60": rv_60,
-        "rv_90": rv_90,
+        "current_iv": float(current_iv),
+        "rv_30": float(rv_30),
+        "rv_60": float(rv_60),
+        "rv_90": float(rv_90),
         "iv_percentile": iv_percentile,
         "iv_rank_label": label,
         "lookback_days": lookback_days,

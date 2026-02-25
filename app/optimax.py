@@ -816,19 +816,8 @@ if symbol:
         with col_price:
             st.metric("Spot Price", f"${spot:,.2f}")
 
-        with st.spinner("Loading options data..."):
-            try:
-                iv_data = _cached_iv_percentile(symbol)
-            except Exception:
-                iv_data = None
-            # Entropy is loaded lazily — only when Options or Entropy tab needs it
-            try:
-                entropy_signal = _cached_entropy()
-            except Exception:
-                entropy_signal = None
-
-        if iv_data:
-            iv_percentile = iv_data["iv_percentile"]
+        # IV and Entropy are loaded lazily when the Options/Entropy tab renders
+        # to minimize upfront API calls and avoid rate limits
 
         for exp in expirations:
             dte = (datetime.strptime(exp, "%Y-%m-%d") - datetime.now()).days
@@ -4281,6 +4270,19 @@ with tab_options:
     symbol = st.session_state.symbol
     if not info or not expirations:
         st.warning(f"Enter a valid ticker symbol above to see options data. Current: **{symbol}**")
+    elif info and symbol:
+        # Load IV and Entropy lazily — only when Options tab is rendered
+        with st.spinner("Loading IV & market data..."):
+            try:
+                iv_data = _cached_iv_percentile(symbol)
+            except Exception:
+                iv_data = None
+            try:
+                entropy_signal = _cached_entropy()
+            except Exception:
+                entropy_signal = None
+            if iv_data:
+                iv_percentile = iv_data["iv_percentile"]
 
     st.markdown("---")
 
@@ -4795,17 +4797,68 @@ with tab_valuation:
 
     @st.cache_data(ttl=600, show_spinner=False)
     def _fetch_valuation_data(sym):
-        """Fetch all valuation data for a ticker. Cached 10 min to avoid rate limits."""
+        """Fetch all valuation data for a ticker. Cached 10 min to avoid rate limits.
+        Uses retry logic and splits calls to reduce rate limit risk."""
         import yfinance as yf
+        import time as _time
+
         t = yf.Ticker(sym)
+
+        # Step 1: Get info with retry
+        val_info = {}
+        for attempt in range(3):
+            try:
+                val_info = t.info
+                if val_info and val_info.get('currentPrice'):
+                    break
+            except Exception:
+                pass
+            _time.sleep(1.5 * (attempt + 1))  # 1.5s, 3s, 4.5s backoff
+
+        # If info failed, try to build from fast_info
+        if not val_info or not val_info.get('currentPrice'):
+            try:
+                fi = t.fast_info
+                val_info = {
+                    'currentPrice': fi.get('lastPrice'),
+                    'marketCap': fi.get('marketCap'),
+                    'sharesOutstanding': fi.get('shares'),
+                    'previousClose': fi.get('previousClose'),
+                    'fiftyDayAverage': fi.get('fiftyDayAverage'),
+                    'twoHundredDayAverage': fi.get('twoHundredDayAverage'),
+                }
+            except Exception:
+                pass
+
+        _time.sleep(0.5)
+
+        # Step 2: Get financial statements (these use a different endpoint, less rate-limited)
+        financials = balance_sheet = cashflow = None
+        q_fin = q_bs = q_cf = None
+        try:
+            financials = t.financials
+            balance_sheet = t.balance_sheet
+            cashflow = t.cashflow
+        except Exception:
+            pass
+
+        _time.sleep(0.5)
+
+        try:
+            q_fin = t.quarterly_financials
+            q_bs = t.quarterly_balance_sheet
+            q_cf = t.quarterly_cashflow
+        except Exception:
+            pass
+
         return {
-            "info": t.info,
-            "financials": t.financials,
-            "balance_sheet": t.balance_sheet,
-            "cashflow": t.cashflow,
-            "quarterly_financials": t.quarterly_financials,
-            "quarterly_balance_sheet": t.quarterly_balance_sheet,
-            "quarterly_cashflow": t.quarterly_cashflow,
+            "info": val_info or {},
+            "financials": financials if financials is not None else pd.DataFrame(),
+            "balance_sheet": balance_sheet if balance_sheet is not None else pd.DataFrame(),
+            "cashflow": cashflow if cashflow is not None else pd.DataFrame(),
+            "quarterly_financials": q_fin if q_fin is not None else pd.DataFrame(),
+            "quarterly_balance_sheet": q_bs if q_bs is not None else pd.DataFrame(),
+            "quarterly_cashflow": q_cf if q_cf is not None else pd.DataFrame(),
         }
 
     if val_symbol and run_valuation:
