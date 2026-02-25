@@ -106,10 +106,19 @@ def fetch_live_sector_weights() -> Optional[np.ndarray]:
     for i, etf in enumerate(etf_list):
         try:
             ticker = yf.Ticker(etf)
+            cap = None
+            # Try fast_info first
             try:
-                cap = ticker.fast_info['marketCap']
+                cap = ticker.fast_info.get('marketCap')
             except (KeyError, AttributeError):
-                cap = ticker.info.get('totalAssets') or ticker.info.get('marketCap')
+                pass
+            # For ETFs, marketCap is often None — use totalAssets instead
+            if not cap or cap <= 0:
+                try:
+                    info = ticker.info
+                    cap = info.get('totalAssets') or info.get('netAssets') or info.get('marketCap')
+                except Exception:
+                    pass
             if cap and cap > 0:
                 caps[etf] = float(cap)
             if i % 4 == 3:
