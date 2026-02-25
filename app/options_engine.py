@@ -3,6 +3,9 @@ Options Data Engine — Core computation module for OptiMax.
 
 Fetches live options chains via yfinance, computes Black-Scholes Greeks,
 and enriches chain data for strategy analysis.
+
+All yfinance calls should go through cached wrappers in optimax.py
+to avoid rate limiting on Streamlit Cloud.
 """
 
 import numpy as np
@@ -93,14 +96,26 @@ def bs_greeks(S, K, T, r, sigma, option_type="call"):
 # ─────────────────────────────────────────────
 
 def get_ticker_info(symbol):
-    """Get basic ticker info: spot price, name, etc."""
+    """Get basic ticker info: spot price, name, etc.
+    Uses fast_info to avoid expensive ticker.info calls.
+    Returns a serializable dict (no yf.Ticker object) for caching."""
     ticker = yf.Ticker(symbol)
     try:
         spot = ticker.fast_info["lastPrice"]
     except Exception:
-        spot = ticker.info.get("currentPrice") or ticker.info.get("regularMarketPrice")
-    name = ticker.info.get("shortName", symbol)
-    return {"symbol": symbol, "spot": spot, "name": name, "ticker": ticker}
+        spot = None
+    # Only call ticker.info if fast_info failed for spot
+    if spot is None:
+        try:
+            info = ticker.info
+            spot = info.get("currentPrice") or info.get("regularMarketPrice") or 0
+            name = info.get("shortName", symbol)
+        except Exception:
+            spot = 0
+            name = symbol
+    else:
+        name = symbol
+    return {"symbol": symbol, "spot": spot, "name": name}
 
 
 def get_expirations(symbol):
@@ -109,20 +124,32 @@ def get_expirations(symbol):
     return list(ticker.options)
 
 
-def get_enriched_chain(symbol, expiration, risk_free_rate=0.045):
+def get_enriched_chain(symbol, expiration, risk_free_rate=0.045, spot=None, ticker_obj=None):
     """
     Fetch options chain from yfinance and enrich with computed Greeks.
+
+    Args:
+        symbol: Ticker symbol
+        expiration: Expiration date string
+        risk_free_rate: Risk-free rate for BS model
+        spot: Pre-fetched spot price (avoids redundant API call)
+        ticker_obj: Pre-fetched yf.Ticker object (avoids redundant API call)
 
     Returns a DataFrame with columns:
         contractSymbol, strike, bid, ask, lastPrice, volume, openInterest,
         impliedVolatility, optionType, spot, T, delta, gamma, theta, vega,
         rho, bsPrice, midPrice, moneyness, moneyness_label
     """
-    info = get_ticker_info(symbol)
-    spot = info["spot"]
-    ticker = info["ticker"]
+    if ticker_obj is None:
+        ticker_obj = yf.Ticker(symbol)
 
-    chain = ticker.option_chain(expiration)
+    if spot is None:
+        try:
+            spot = ticker_obj.fast_info["lastPrice"]
+        except Exception:
+            spot = 0
+
+    chain = ticker_obj.option_chain(expiration)
 
     exp_date = datetime.strptime(expiration, "%Y-%m-%d")
     today = datetime.now()
@@ -169,6 +196,7 @@ def get_enriched_chain(symbol, expiration, risk_free_rate=0.045):
         results.append(df)
 
     combined = pd.concat(results, ignore_index=True)
+    info = {"symbol": symbol, "spot": spot, "name": symbol}
     return combined, info
 
 

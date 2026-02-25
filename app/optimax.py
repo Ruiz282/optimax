@@ -80,6 +80,30 @@ def _cached_entropy():
     return compute_market_entropy(lookback_days=90)
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_ticker_info(sym):
+    """Cache ticker info for 5 min to avoid rate limits."""
+    return get_ticker_info(sym)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_expirations(sym):
+    """Cache expirations for 5 min."""
+    return get_expirations(sym)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_iv_percentile(sym):
+    """Cache IV percentile for 5 min."""
+    return compute_iv_percentile(sym)
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _cached_enriched_chain(sym, expiration, rfr, _spot):
+    """Cache enriched chain for 2 min."""
+    return get_enriched_chain(sym, expiration, rfr, spot=_spot)
+
+
 # ─────────────────────────────────────────────
 # Delta-Based Probability of Profit
 # ─────────────────────────────────────────────
@@ -777,8 +801,8 @@ exp_with_dte = []
 if symbol:
     try:
         with st.spinner(f"Fetching data for {symbol}..."):
-            info = get_ticker_info(symbol)
-            expirations = get_expirations(symbol)
+            info = _cached_ticker_info(symbol)
+            expirations = _cached_expirations(symbol)
     except Exception:
         info = None
         expirations = []
@@ -793,7 +817,7 @@ if symbol:
             st.metric("Spot Price", f"${spot:,.2f}")
 
         with st.spinner("Loading options data..."):
-            iv_data = compute_iv_percentile(symbol)
+            iv_data = _cached_iv_percentile(symbol)
             entropy_signal = _cached_entropy()
 
         if iv_data:
@@ -4330,9 +4354,9 @@ with tab_options:
     if selected_exp:
         selected_dte = (datetime.strptime(selected_exp, "%Y-%m-%d") - datetime.now()).days
 
-        # ── Fetch Chain ──
+        # ── Fetch Chain (cached, reuse spot to avoid extra API call) ──
         with st.spinner(f"Loading options chain for {selected_exp}..."):
-            chain_df, _ = get_enriched_chain(symbol, selected_exp, risk_free_rate)
+            chain_df, _ = _cached_enriched_chain(symbol, selected_exp, risk_free_rate, spot)
 
         st.markdown("---")
 
