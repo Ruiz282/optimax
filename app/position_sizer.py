@@ -59,7 +59,7 @@ def compute_position_size(
     max_gain_per_contract: Optional[float],
     is_credit: bool,
     net_cost_per_contract: float,
-    estimated_pop: float = 0.55,
+    estimated_pop: float = 0.50,
 ) -> dict:
     """
     Compute position size using portfolio risk rules and Kelly criterion.
@@ -71,7 +71,11 @@ def compute_position_size(
         max_gain_per_contract: Maximum dollar gain per contract (None = unlimited)
         is_credit: Whether the trade collects credit
         net_cost_per_contract: Net cost per contract (positive = debit)
-        estimated_pop: Estimated probability of profit (default 55%)
+        estimated_pop: Probability of profit derived from option delta.
+                       For credit spreads: POP = 1 - |short_delta|
+                       For debit spreads: POP = |long_delta|
+                       For long options: POP = |delta|
+                       Fallback: 0.50 (coin flip) if delta unavailable.
 
     Returns:
         Dict with contracts, kelly info, capital required, warnings
@@ -182,9 +186,13 @@ def generate_trade_card(
     max_loss_dollars: float,
     max_gain_dollars: Optional[float],
     breakevens: List[float],
+    estimated_pop: float = 0.50,
 ) -> TradeCard:
     """
     Generate a complete trade card for a strategy recommendation.
+
+    Args:
+        estimated_pop: Probability of profit derived from option delta.
     """
     is_credit = net_cost < 0
     net_cost_per_contract = abs(net_cost) * 100
@@ -197,6 +205,7 @@ def generate_trade_card(
         max_gain_per_contract=max_gain_dollars,
         is_credit=is_credit,
         net_cost_per_contract=net_cost_per_contract if not is_credit else -net_cost_per_contract,
+        estimated_pop=estimated_pop,
     )
 
     contracts = sizing["contracts"]

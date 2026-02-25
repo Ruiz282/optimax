@@ -128,7 +128,6 @@ STRATEGIES = [
         max_gain_desc="Credit received",
         greeks_profile="Mildly long delta, short vega, positive theta",
         why_it_works="You collect premium upfront. If the stock stays above your short put strike by expiration, you keep the full credit. High IV means you collect MORE premium. Time decay (theta) works in your favor every day.",
-        score_boost=5.0,  # very popular strategy, good risk/reward
     ),
     StrategyDefinition(
         name="Bear Call Spread",
@@ -197,7 +196,6 @@ STRATEGIES = [
         max_gain_desc="Total credit received",
         greeks_profile="Near-zero delta, short vega, positive theta",
         why_it_works="You collect premium on both sides. As long as the stock stays between your short strikes, you keep the credit. High IV is crucial because (1) you collect more premium and (2) IV contraction increases your profit. Time decay helps every day.",
-        score_boost=5.0,
     ),
     StrategyDefinition(
         name="Long Straddle",

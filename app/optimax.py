@@ -71,6 +71,74 @@ from pathlib import Path
 load_dotenv(Path(__file__).parent / ".env")
 
 # ─────────────────────────────────────────────
+# Delta-Based Probability of Profit
+# ─────────────────────────────────────────────
+
+def _compute_pop_from_delta(strategy_name: str, concrete_legs: list, chain_df) -> float:
+    """
+    Compute probability of profit from option delta in the chain.
+
+    For credit strategies: POP = 1 - |short_leg_delta|
+    For debit strategies: POP = |long_leg_delta|
+    For long options: POP = |delta|
+    Fallback: 0.50 if chain data unavailable.
+    """
+    if chain_df is None or chain_df.empty or not concrete_legs:
+        return 0.50
+
+    def _get_delta(strike, option_type):
+        """Look up delta for a strike/type in the chain."""
+        subset = chain_df[chain_df["optionType"] == option_type]
+        if subset.empty:
+            return None
+        idx = (subset["strike"] - strike).abs().idxmin()
+        return float(subset.loc[idx, "delta"])
+
+    credit_strategies = {"Bull Put Spread", "Bear Call Spread", "Iron Condor",
+                         "Cash-Secured Put", "Covered Call"}
+    debit_strategies = {"Bull Call Spread", "Bear Put Spread"}
+    long_strategies = {"Long Call", "Long Put"}
+    vol_strategies = {"Long Straddle", "Long Strangle"}
+
+    try:
+        if strategy_name in credit_strategies:
+            # Find the short leg and use 1 - |delta|
+            for leg in concrete_legs:
+                if leg["action"] == "sell":
+                    d = _get_delta(leg["strike"], leg["type"])
+                    if d is not None:
+                        return max(0.05, min(0.95, 1.0 - abs(d)))
+        elif strategy_name in debit_strategies:
+            # Find the long leg and use |delta|
+            for leg in concrete_legs:
+                if leg["action"] == "buy":
+                    d = _get_delta(leg["strike"], leg["type"])
+                    if d is not None:
+                        return max(0.05, min(0.95, abs(d)))
+        elif strategy_name in long_strategies:
+            # Single long option: POP = |delta|
+            leg = concrete_legs[0]
+            d = _get_delta(leg["strike"], leg["type"])
+            if d is not None:
+                return max(0.05, min(0.95, abs(d)))
+        elif strategy_name in vol_strategies:
+            # Straddle/strangle: approximate POP as probability of big move
+            call_leg = next((l for l in concrete_legs if l["type"] == "call"), None)
+            put_leg = next((l for l in concrete_legs if l["type"] == "put"), None)
+            if call_leg and put_leg:
+                cd = _get_delta(call_leg["strike"], "call")
+                pd_ = _get_delta(put_leg["strike"], "put")
+                if cd is not None and pd_ is not None:
+                    # POP of straddle ≈ prob of finishing outside breakevens
+                    pop = abs(cd) + abs(pd_) - 1.0
+                    return max(0.05, min(0.95, abs(pop)))
+    except Exception:
+        pass
+
+    return 0.50  # fallback
+
+
+# ─────────────────────────────────────────────
 # User Data Persistence
 # ─────────────────────────────────────────────
 USER_DATA_DIR = os.path.join(os.path.dirname(__file__), "user_data")
@@ -4290,6 +4358,9 @@ with tab_options:
             for i, rec in enumerate(recommendations[:5]):
                 strat = rec.strategy
 
+                # Compute delta-based POP from the chain
+                pop = _compute_pop_from_delta(strat.name, rec.concrete_legs, chain_df)
+
                 # Generate trade card
                 card = generate_trade_card(
                     strategy_name=strat.name,
@@ -4304,6 +4375,7 @@ with tab_options:
                     max_loss_dollars=rec.max_loss_dollars,
                     max_gain_dollars=rec.max_gain_dollars,
                     breakevens=rec.breakeven,
+                    estimated_pop=pop,
                 )
 
                 # Entropy badge
@@ -4406,16 +4478,19 @@ with tab_options:
 
                     # ── Kelly Criterion ──
                     if card.kelly_fraction is not None:
+                        pop_source = "delta-derived" if pop != 0.50 else "default"
                         if card.kelly_fraction > 0:
                             st.caption(
+                                f"POP: {pop:.0%} ({pop_source}) | "
                                 f"Half-Kelly suggests {card.kelly_contracts} contracts "
                                 f"({card.kelly_fraction:.1%} of portfolio). "
                                 f"Risk-rule sizing: {card.recommended_contracts} contracts."
                             )
                         elif card.kelly_fraction < 0:
                             st.caption(
+                                f"POP: {pop:.0%} ({pop_source}) | "
                                 f"Kelly criterion is negative ({card.kelly_fraction:.3f}) — "
-                                f"risk/reward may not justify this trade at estimated probability."
+                                f"risk/reward may not justify this trade."
                             )
 
                     # ── Warnings ──
@@ -5557,7 +5632,7 @@ with tab_entropy:
         with me1:
             st.metric("Current Entropy", f"{entropy_signal.current_entropy:.3f} bits")
         with me2:
-            st.metric("Baseline (Nov 2022)", f"{entropy_signal.baseline_entropy:.3f} bits")
+            st.metric("Baseline (Equal-Weight)", f"{entropy_signal.baseline_entropy:.3f} bits")
         with me3:
             st.metric("Normalized", f"{entropy_signal.current_normalized:.3f}",
                        help="0 = one sector dominates, 1 = perfectly equal")
@@ -5579,7 +5654,8 @@ with tab_entropy:
         bars = ax4.barh(sector_df["Sector"], sector_df["Weight"] * 100,
                         color=colors_s)
         ax4.set_xlabel("Weight (%)", color='white')
-        ax4.set_title("S&P 500 Sector Weights (Estimated from ETF Performance)", color='white')
+        weights_src = "Live Market Caps" if entropy_signal.using_live_caps else "ETF Performance Estimate"
+        ax4.set_title(f"S&P 500 Sector Weights ({weights_src})", color='white')
         ax4.tick_params(colors='white')
 
         for bar, val in zip(bars, sector_df["Weight"]):

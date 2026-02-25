@@ -1,9 +1,9 @@
 """
-Entropy Bridge — Connects parent repo's information theory framework
-to options strategy signals.
+Entropy Bridge — Connects information theory framework to options strategy signals.
 
 Maps entropy changes and concentration shifts to actionable options
-strategy regime signals.
+strategy regime signals. Uses live market caps for sector weights
+and continuous functions for smooth regime transitions.
 """
 
 import numpy as np
@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Tuple
 
 
 # ─────────────────────────────────────────────
-# Core Entropy Functions (from parent repo)
+# Core Entropy Functions
 # ─────────────────────────────────────────────
 
 def sector_entropy(weights: np.ndarray) -> float:
@@ -78,12 +78,61 @@ SECTOR_ETFS = {
     "XLRE": "Real Estate",
 }
 
-# Historical baseline (Nov 2022, pre-AI boom)
-BASELINE_WEIGHTS = np.array([
+# Static fallback weights (used only when live data is unavailable)
+FALLBACK_WEIGHTS = np.array([
     0.20, 0.15, 0.12, 0.10, 0.08, 0.08, 0.07, 0.05, 0.03, 0.03, 0.03
 ])
-BASELINE_ENTROPY = sector_entropy(BASELINE_WEIGHTS)
-BASELINE_HHI = herfindahl_index(BASELINE_WEIGHTS)
+
+
+# ─────────────────────────────────────────────
+# Live Market Cap Weights
+# ─────────────────────────────────────────────
+
+def fetch_live_sector_weights() -> Optional[np.ndarray]:
+    """
+    Fetch actual market caps for sector ETFs and compute weights.
+    Returns normalized weight array in SECTOR_ETFS order, or None on failure.
+    """
+    caps = {}
+    etf_list = list(SECTOR_ETFS.keys())
+    for etf in etf_list:
+        try:
+            ticker = yf.Ticker(etf)
+            # Try fast_info first, fall back to info
+            try:
+                cap = ticker.fast_info['marketCap']
+            except (KeyError, AttributeError):
+                cap = ticker.info.get('totalAssets') or ticker.info.get('marketCap')
+            if cap and cap > 0:
+                caps[etf] = float(cap)
+        except Exception:
+            continue
+
+    if len(caps) < 8:
+        return None
+
+    weights = np.array([caps.get(etf, 0) for etf in etf_list], dtype=float)
+    # Replace any zeros with a small value to avoid division issues
+    weights = np.maximum(weights, 1.0)
+    return weights / weights.sum()
+
+
+# ─────────────────────────────────────────────
+# Continuous Entropy Signal
+# ─────────────────────────────────────────────
+
+def continuous_entropy_signal(entropy_change: float, scale: float = 0.15) -> float:
+    """
+    Continuous regime signal from entropy change.
+
+    Returns a value from -1.0 (full concentration) to +1.0 (full uncertainty).
+    Uses tanh for smooth, bounded scaling.
+
+    Args:
+        entropy_change: Current entropy minus baseline entropy (bits)
+        scale: Controls sensitivity — smaller = more sensitive to small changes
+    """
+    return float(np.tanh(entropy_change / scale))
 
 
 # ─────────────────────────────────────────────
@@ -108,14 +157,16 @@ class EntropySignal:
     entropy_30d_ago: Optional[float]
     entropy_trend: str  # "rising", "falling", "stable"
 
-    # Strategy signal
+    # Strategy signal (derived from continuous function)
     regime: str          # "UNCERTAINTY", "CONCENTRATION", "STABLE"
     strategy_bias: str   # "BUY_PREMIUM", "SELL_PREMIUM", "NEUTRAL"
     signal_strength: str # "STRONG", "MODERATE", "WEAK"
+    regime_score: float  # continuous: -1.0 to +1.0
 
     # Sector breakdown
     sector_weights: Dict[str, float]
     top_sectors: List[Tuple[str, float]]
+    using_live_caps: bool  # whether live market caps were used
 
     # Explanation
     explanation: str
@@ -124,17 +175,21 @@ class EntropySignal:
 
 def compute_market_entropy(lookback_days: int = 90) -> Optional[EntropySignal]:
     """
-    Compute current market entropy from sector ETF market caps and compare
-    to historical baseline.
+    Compute current market entropy from sector ETF data.
 
-    Uses relative performance of sector ETFs as a proxy for weight changes.
+    Uses live market caps for current weights when available,
+    falling back to price-performance-adjusted baseline weights.
     """
     end = datetime.now()
     start = end - timedelta(days=lookback_days + 10)
 
-    # Fetch sector ETF data
+    # ── Try live market cap weights first ──
+    live_weights = fetch_live_sector_weights()
+    using_live_caps = live_weights is not None
+
+    # Fetch sector ETF price history for trend analysis
     sector_prices = {}
-    for etf, name in SECTOR_ETFS.items():
+    for etf in SECTOR_ETFS:
         try:
             ticker = yf.Ticker(etf)
             hist = ticker.history(
@@ -153,22 +208,38 @@ def compute_market_entropy(lookback_days: int = 90) -> Optional[EntropySignal]:
     if len(prices_df) < 30:
         return None
 
-    # ── Current weights (proxy via relative market cap / price performance) ──
-    # Use latest prices normalized to a base period
-    latest_prices = prices_df.iloc[-1]
-    base_prices = prices_df.iloc[0]
-    relative_performance = latest_prices / base_prices
-
-    # Weight by relative performance (stronger sectors get higher weight)
-    # Start from baseline and adjust by performance
-    adjusted_weights = BASELINE_WEIGHTS.copy()
     etf_list = list(SECTOR_ETFS.keys())
-    for i, etf in enumerate(etf_list):
-        if etf in relative_performance.index and i < len(adjusted_weights):
-            adjusted_weights[i] *= relative_performance[etf]
 
-    # Normalize
-    adjusted_weights = adjusted_weights / adjusted_weights.sum()
+    # ── Current weights ──
+    if using_live_caps:
+        adjusted_weights = live_weights
+    else:
+        # Fallback: adjust static weights by relative price performance
+        latest_prices = prices_df.iloc[-1]
+        base_prices = prices_df.iloc[0]
+        relative_performance = latest_prices / base_prices
+        adjusted_weights = FALLBACK_WEIGHTS.copy()
+        for i, etf in enumerate(etf_list):
+            if etf in relative_performance.index and i < len(adjusted_weights):
+                adjusted_weights[i] *= relative_performance[etf]
+        adjusted_weights = adjusted_weights / adjusted_weights.sum()
+
+    # ── 30-day ago weights (for trend) ──
+    if len(prices_df) >= 30:
+        prices_30d_ago = prices_df.iloc[-30]
+        latest_prices = prices_df.iloc[-1]
+        # Compute relative change over 30 days
+        perf_30d = latest_prices / prices_30d_ago
+        # Estimate 30-day-ago weights by reversing recent performance
+        weights_30d_ago = adjusted_weights.copy()
+        for i, etf in enumerate(etf_list):
+            if etf in perf_30d.index and i < len(weights_30d_ago):
+                if perf_30d[etf] != 0:
+                    weights_30d_ago[i] /= perf_30d[etf]
+        weights_30d_ago = weights_30d_ago / weights_30d_ago.sum()
+        entropy_30d_ago = sector_entropy(weights_30d_ago)
+    else:
+        entropy_30d_ago = None
 
     # ── Compute entropy metrics ──
     current_entropy = sector_entropy(adjusted_weights)
@@ -176,22 +247,12 @@ def compute_market_entropy(lookback_days: int = 90) -> Optional[EntropySignal]:
     current_normalized = normalized_entropy(adjusted_weights)
     current_cr7 = concentration_ratio(adjusted_weights, 7)
 
-    # ── 30-day ago entropy ──
-    if len(prices_df) >= 30:
-        prices_30d_ago = prices_df.iloc[-30]
-        perf_30d_ago = prices_30d_ago / base_prices
-        weights_30d_ago = BASELINE_WEIGHTS.copy()
-        for i, etf in enumerate(etf_list):
-            if etf in perf_30d_ago.index and i < len(weights_30d_ago):
-                weights_30d_ago[i] *= perf_30d_ago[etf]
-        weights_30d_ago = weights_30d_ago / weights_30d_ago.sum()
-        entropy_30d_ago = sector_entropy(weights_30d_ago)
-    else:
-        entropy_30d_ago = None
+    # ── Baseline entropy (equal-weight = maximum entropy for 11 sectors) ──
+    baseline_entropy = max_entropy(len(SECTOR_ETFS))
 
-    # ── Entropy change from baseline ──
-    entropy_change = current_entropy - BASELINE_ENTROPY
-    entropy_change_pct = (entropy_change / BASELINE_ENTROPY) * 100
+    # ── Entropy change from equal-weight baseline ──
+    entropy_change = current_entropy - baseline_entropy
+    entropy_change_pct = (entropy_change / baseline_entropy) * 100 if baseline_entropy > 0 else 0
 
     # ── Trend ──
     if entropy_30d_ago is not None:
@@ -205,31 +266,26 @@ def compute_market_entropy(lookback_days: int = 90) -> Optional[EntropySignal]:
     else:
         entropy_trend = "stable"
 
-    # ── Regime classification ──
-    if entropy_change < -0.10:
+    # ── Continuous regime classification ──
+    regime_score = continuous_entropy_signal(entropy_change)
+
+    if regime_score < -0.3:
         regime = "CONCENTRATION"
         strategy_bias = "SELL_PREMIUM"
-        if abs(entropy_change) > 0.20:
-            signal_strength = "STRONG"
-        else:
-            signal_strength = "MODERATE"
-    elif entropy_change > 0.10:
+    elif regime_score > 0.3:
         regime = "UNCERTAINTY"
         strategy_bias = "BUY_PREMIUM"
-        if abs(entropy_change) > 0.20:
-            signal_strength = "STRONG"
-        else:
-            signal_strength = "MODERATE"
     else:
         regime = "STABLE"
         strategy_bias = "NEUTRAL"
-        signal_strength = "WEAK"
 
-    # Override with trend if trend disagrees with level
-    if entropy_trend == "rising" and regime != "UNCERTAINTY":
-        signal_strength = "MODERATE" if signal_strength == "STRONG" else "WEAK"
-    elif entropy_trend == "falling" and regime != "CONCENTRATION":
-        signal_strength = "MODERATE" if signal_strength == "STRONG" else "WEAK"
+    abs_score = abs(regime_score)
+    if abs_score > 0.7:
+        signal_strength = "STRONG"
+    elif abs_score > 0.3:
+        signal_strength = "MODERATE"
+    else:
+        signal_strength = "WEAK"
 
     # ── Sector breakdown ──
     sector_weights = {}
@@ -242,7 +298,7 @@ def compute_market_entropy(lookback_days: int = 90) -> Optional[EntropySignal]:
     # ── Build explanations ──
     explanation = _build_explanation(
         regime, entropy_change, entropy_change_pct, entropy_trend,
-        current_entropy, current_hhi, top_sectors,
+        current_entropy, current_hhi, top_sectors, using_live_caps, regime_score,
     )
     strategy_implications = _build_implications(regime, strategy_bias, entropy_trend)
 
@@ -251,7 +307,7 @@ def compute_market_entropy(lookback_days: int = 90) -> Optional[EntropySignal]:
         current_hhi=current_hhi,
         current_normalized=current_normalized,
         current_cr7=current_cr7,
-        baseline_entropy=BASELINE_ENTROPY,
+        baseline_entropy=baseline_entropy,
         entropy_change=entropy_change,
         entropy_change_pct=entropy_change_pct,
         entropy_30d_ago=entropy_30d_ago,
@@ -259,42 +315,51 @@ def compute_market_entropy(lookback_days: int = 90) -> Optional[EntropySignal]:
         regime=regime,
         strategy_bias=strategy_bias,
         signal_strength=signal_strength,
+        regime_score=regime_score,
         sector_weights=sector_weights,
         top_sectors=top_sectors,
+        using_live_caps=using_live_caps,
         explanation=explanation,
         strategy_implications=strategy_implications,
     )
 
 
 def _build_explanation(regime, entropy_change, entropy_change_pct, trend,
-                       current_entropy, current_hhi, top_sectors):
+                       current_entropy, current_hhi, top_sectors,
+                       using_live_caps, regime_score):
     """Build human-readable entropy explanation."""
     direction = "decreased" if entropy_change < 0 else "increased"
     top3 = ", ".join(f"{name} ({w:.1%})" for name, w in top_sectors[:3])
+    source = "live market caps" if using_live_caps else "price-adjusted estimates"
 
     if regime == "CONCENTRATION":
         return (
             f"Market entropy has {direction} by {abs(entropy_change):.3f} bits "
-            f"({abs(entropy_change_pct):.1f}%) from the Nov 2022 baseline. "
+            f"({abs(entropy_change_pct):.1f}%) from equal-weight baseline. "
+            f"Regime score: {regime_score:.2f} (continuous). "
             f"This signals increasing concentration — fewer sectors are driving returns. "
             f"Top sectors: {top3}. "
             f"HHI at {current_hhi:.4f} confirms concentration. "
+            f"Weights source: {source}. "
             f"30-day trend: {trend}."
         )
     elif regime == "UNCERTAINTY":
         return (
             f"Market entropy has {direction} by {abs(entropy_change):.3f} bits "
-            f"({abs(entropy_change_pct):.1f}%) from the Nov 2022 baseline. "
+            f"({abs(entropy_change_pct):.1f}%) from equal-weight baseline. "
+            f"Regime score: {regime_score:.2f} (continuous). "
             f"This signals increasing dispersion — more sectors are participating in returns. "
-            f"The investment universe is expanding. "
             f"Top sectors: {top3}. "
+            f"Weights source: {source}. "
             f"30-day trend: {trend}."
         )
     else:
         return (
             f"Market entropy is near baseline (change: {entropy_change:+.3f} bits, "
-            f"{entropy_change_pct:+.1f}%). No strong regime signal. "
+            f"{entropy_change_pct:+.1f}%). Regime score: {regime_score:.2f} (continuous). "
+            f"No strong regime signal. "
             f"Top sectors: {top3}. "
+            f"Weights source: {source}. "
             f"30-day trend: {trend}."
         )
 
@@ -308,7 +373,7 @@ def _build_implications(regime, strategy_bias, trend):
             "Market is concentrating into fewer sectors — momentum is strong in leaders",
             "Index-level volatility tends to compress in concentrated markets",
             "FAVOR: Iron condors on indices (range-bound behavior expected)",
-            "FAVOR: Credit spreads in the direction of concentration (e.g., bull put spreads on tech leaders)",
+            "FAVOR: Credit spreads in the direction of concentration",
             "FAVOR: Covered calls on winners (upside decelerating)",
             "AVOID: Long straddles on indices (unlikely to break range)",
         ])
@@ -340,65 +405,39 @@ def _build_implications(regime, strategy_bias, trend):
 
 
 # ─────────────────────────────────────────────
-# Score Adjustment for Strategy Engine
+# Score Adjustment for Strategy Engine (Continuous)
 # ─────────────────────────────────────────────
+
+# Strategy affinities: negative = favors concentration, positive = favors uncertainty
+STRATEGY_AFFINITIES = {
+    "Iron Condor": -12,
+    "Bull Put Spread": -10,
+    "Bear Call Spread": -10,
+    "Covered Call": -8,
+    "Cash-Secured Put": -8,
+    "Calendar Spread": -3,
+    "Bull Call Spread": 3,
+    "Bear Put Spread": 3,
+    "Long Call": 5,
+    "Long Put": 8,
+    "Long Straddle": 12,
+    "Long Strangle": 12,
+}
+
 
 def entropy_score_adjustment(strategy_name: str, signal: EntropySignal) -> float:
     """
-    Return a score adjustment (-15 to +15) for a strategy based on
+    Return a continuous score adjustment for a strategy based on
     the current entropy regime.
+
+    Uses tanh-based regime_score for smooth transitions instead of
+    stepped thresholds. Returns values in the range [-12, +12].
     """
     if signal is None:
         return 0.0
 
-    # Strategy affinities by regime
-    concentration_favored = {
-        "Iron Condor": 12,
-        "Bull Put Spread": 10,
-        "Bear Call Spread": 10,
-        "Covered Call": 8,
-        "Cash-Secured Put": 8,
-        "Calendar Spread": 5,
-        "Bull Call Spread": 3,
-        "Bear Put Spread": 3,
-    }
-    concentration_penalized = {
-        "Long Straddle": -10,
-        "Long Strangle": -10,
-        "Long Call": -3,
-        "Long Put": -3,
-    }
-
-    uncertainty_favored = {
-        "Long Straddle": 12,
-        "Long Strangle": 12,
-        "Long Put": 8,
-        "Long Call": 5,
-        "Calendar Spread": 5,
-    }
-    uncertainty_penalized = {
-        "Iron Condor": -10,
-        "Bull Put Spread": -5,
-        "Bear Call Spread": -5,
-        "Covered Call": -5,
-        "Cash-Secured Put": -5,
-    }
-
-    adjustment = 0.0
-
-    if signal.regime == "CONCENTRATION":
-        adjustment += concentration_favored.get(strategy_name, 0)
-        adjustment += concentration_penalized.get(strategy_name, 0)
-    elif signal.regime == "UNCERTAINTY":
-        adjustment += uncertainty_favored.get(strategy_name, 0)
-        adjustment += uncertainty_penalized.get(strategy_name, 0)
-
-    # Scale by signal strength
-    if signal.signal_strength == "STRONG":
-        adjustment *= 1.0
-    elif signal.signal_strength == "MODERATE":
-        adjustment *= 0.6
-    else:
-        adjustment *= 0.3
-
-    return adjustment
+    affinity = STRATEGY_AFFINITIES.get(strategy_name, 0)
+    # regime_score is -1 to +1 (concentration to uncertainty)
+    # affinity is negative for concentration-favored strategies
+    # So: concentration regime (score < 0) × negative affinity = positive adjustment
+    return affinity * signal.regime_score
