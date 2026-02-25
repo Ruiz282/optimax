@@ -91,38 +91,55 @@ FALLBACK_WEIGHTS = np.array([
 
 def fetch_live_sector_weights() -> Optional[np.ndarray]:
     """
-    Fetch actual market caps for sector ETFs and compute weights.
-    Returns normalized weight array in SECTOR_ETFS order, or None on failure.
+    Fetch sector ETF weights using price × volume as a proxy for relative size.
+    Uses a single batch yf.download() call to avoid rate limiting.
+    Falls back to individual ticker queries only if batch fails.
     """
-    caps = {}
     etf_list = list(SECTOR_ETFS.keys())
-    # Batch download to minimize API calls
+
+    # Method 1: Use batch download — price × avgVolume as size proxy
+    # This avoids individual ticker.info calls entirely
     try:
-        tickers_str = " ".join(etf_list)
-        data = yf.download(tickers_str, period="1d", progress=False)
-        # Use latest closing prices × shares as proxy, or try info
+        batch = yf.download(etf_list, period="5d", progress=False)
+        if not batch.empty and "Close" in batch.columns or len(batch.columns) > 0:
+            try:
+                closes = batch["Close"].iloc[-1]
+                volumes = batch["Volume"].mean()  # average daily volume
+                # price × avg volume = rough daily dollar volume (proxy for size)
+                dollar_vol = closes * volumes
+                dollar_vol = dollar_vol.dropna()
+                if len(dollar_vol) >= 8:
+                    weights = np.array([dollar_vol.get(etf, 0) for etf in etf_list], dtype=float)
+                    weights = np.maximum(weights, 1.0)
+                    return weights / weights.sum()
+            except Exception:
+                pass
     except Exception:
         pass
+
+    # Method 2: Fallback — use fast_info.shares × price (fewer API calls than .info)
+    caps = {}
     for i, etf in enumerate(etf_list):
         try:
             ticker = yf.Ticker(etf)
-            cap = None
-            # Try fast_info first
             try:
-                cap = ticker.fast_info.get('marketCap')
-            except (KeyError, AttributeError):
+                price = ticker.fast_info.get("lastPrice", 0) or 0
+                shares = ticker.fast_info.get("shares", 0) or 0
+                if price > 0 and shares > 0:
+                    caps[etf] = price * shares
+                    continue
+            except Exception:
                 pass
-            # For ETFs, marketCap is often None — use totalAssets instead
-            if not cap or cap <= 0:
-                try:
-                    info = ticker.info
-                    cap = info.get('totalAssets') or info.get('netAssets') or info.get('marketCap')
-                except Exception:
-                    pass
-            if cap and cap > 0:
-                caps[etf] = float(cap)
+            # Last resort: ticker.info (expensive)
+            try:
+                info = ticker.info
+                cap = info.get('totalAssets') or info.get('netAssets') or info.get('marketCap') or 0
+                if cap > 0:
+                    caps[etf] = float(cap)
+            except Exception:
+                pass
             if i % 4 == 3:
-                time.sleep(0.3)  # gentle rate limiting
+                time.sleep(0.5)
         except Exception:
             continue
 
@@ -130,7 +147,6 @@ def fetch_live_sector_weights() -> Optional[np.ndarray]:
         return None
 
     weights = np.array([caps.get(etf, 0) for etf in etf_list], dtype=float)
-    # Replace any zeros with a small value to avoid division issues
     weights = np.maximum(weights, 1.0)
     return weights / weights.sum()
 

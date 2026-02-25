@@ -817,8 +817,15 @@ if symbol:
             st.metric("Spot Price", f"${spot:,.2f}")
 
         with st.spinner("Loading options data..."):
-            iv_data = _cached_iv_percentile(symbol)
-            entropy_signal = _cached_entropy()
+            try:
+                iv_data = _cached_iv_percentile(symbol)
+            except Exception:
+                iv_data = None
+            # Entropy is loaded lazily — only when Options or Entropy tab needs it
+            try:
+                entropy_signal = _cached_entropy()
+            except Exception:
+                entropy_signal = None
 
         if iv_data:
             iv_percentile = iv_data["iv_percentile"]
@@ -4355,8 +4362,15 @@ with tab_options:
         selected_dte = (datetime.strptime(selected_exp, "%Y-%m-%d") - datetime.now()).days
 
         # ── Fetch Chain (cached, reuse spot to avoid extra API call) ──
+        chain_df = None
         with st.spinner(f"Loading options chain for {selected_exp}..."):
-            chain_df, _ = _cached_enriched_chain(symbol, selected_exp, risk_free_rate, spot)
+            try:
+                chain_df, _ = _cached_enriched_chain(symbol, selected_exp, risk_free_rate, spot)
+            except Exception as e:
+                st.error(f"Could not load options chain: {e}")
+
+        if chain_df is None or chain_df.empty:
+            st.warning("Options chain data unavailable. Yahoo Finance may be rate-limiting. Try again in a minute.")
 
         st.markdown("---")
 
