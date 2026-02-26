@@ -408,9 +408,10 @@ def create_holding(symbol: str, shares: float, avg_cost: float, purchase_date: O
 
 
 def create_holdings_batch(items: List[Dict]) -> List[Holding]:
-    """Create multiple holdings using a single batch yf.download for speed.
+    """Create multiple holdings using batch yf.download for speed.
     Each item: {symbol, shares, cost, purchase_date, notes}.
-    Much faster than calling create_holding() in a loop."""
+    Relies on batch download for prices (1 API call) and tries
+    individual ticker.info only as enrichment — never blocks on failure."""
     import time as _time
 
     if not items:
@@ -418,73 +419,85 @@ def create_holdings_batch(items: List[Dict]) -> List[Holding]:
 
     symbols = list({item["symbol"].upper() for item in items})
 
-    # Batch download current prices (single API call)
+    # Step 1: Batch download current prices (single API call — most reliable)
+    close_prices = {}
     try:
-        prices_df = yf.download(symbols, period="1d", progress=False)
-        if isinstance(prices_df.columns, pd.MultiIndex):
-            close_prices = prices_df["Close"].iloc[-1] if len(prices_df) > 0 else pd.Series()
-        else:
-            # Single ticker returns flat columns
-            close_prices = pd.Series({symbols[0]: prices_df["Close"].iloc[-1]}) if len(prices_df) > 0 else pd.Series()
+        prices_df = yf.download(symbols, period="5d", progress=False)
+        if len(prices_df) > 0:
+            if isinstance(prices_df.columns, pd.MultiIndex):
+                last_row = prices_df["Close"].iloc[-1]
+                for sym in symbols:
+                    try:
+                        val = float(last_row[sym])
+                        if val > 0 and not np.isnan(val):
+                            close_prices[sym] = val
+                    except Exception:
+                        pass
+            else:
+                # Single ticker — flat columns
+                try:
+                    val = float(prices_df["Close"].iloc[-1])
+                    if val > 0 and not np.isnan(val):
+                        close_prices[symbols[0]] = val
+                except Exception:
+                    pass
     except Exception:
-        close_prices = pd.Series()
+        pass
 
-    # Fetch info for each ticker (needed for name, sector, etc.) with small delays
+    # Step 2: Build base info from batch prices (guaranteed to work if download succeeded)
     info_cache = {}
     for sym in symbols:
+        price = close_prices.get(sym, 0)
+        if price > 0:
+            info_cache[sym] = {
+                "symbol": sym,
+                "name": sym,
+                "asset_type": "Stock",
+                "current_price": price,
+                "dividend_yield": 0,
+                "dividend_rate": 0,
+                "sector": None,
+                "beta": None,
+                "pe_ratio": None,
+                "fifty_two_week_high": None,
+                "fifty_two_week_low": None,
+            }
+
+    # Step 3: Try to enrich with ticker.info (best effort — skip on rate limit)
+    for sym in symbols:
+        if sym not in info_cache:
+            continue  # No price — skip enrichment
         try:
             t = yf.Ticker(sym)
-            try:
-                fi = t.fast_info
-                price = fi.get("lastPrice") or float(close_prices.get(sym, 0))
+            info = t.info
+            if info and isinstance(info, dict):
+                cp = info.get("currentPrice") or info.get("regularMarketPrice") or info_cache[sym]["current_price"]
+                div_yield = info.get("dividendYield") or info.get("yield") or 0
+                if div_yield and div_yield > 1:
+                    div_yield = div_yield / 100
+                div_rate = info.get("dividendRate") or info.get("trailingAnnualDividendRate") or 0
+                if div_yield > 0 and div_rate == 0 and cp > 0:
+                    div_rate = cp * div_yield
+                elif div_rate > 0 and div_yield == 0 and cp > 0:
+                    div_yield = div_rate / cp
                 info_cache[sym] = {
                     "symbol": sym,
-                    "name": sym,
-                    "asset_type": "Stock",
-                    "current_price": price,
-                    "dividend_yield": 0,
-                    "dividend_rate": 0,
-                    "sector": None,
-                    "beta": None,
-                    "pe_ratio": None,
-                    "fifty_two_week_high": fi.get("yearHigh"),
-                    "fifty_two_week_low": fi.get("yearLow"),
+                    "name": info.get("shortName") or info.get("longName") or sym,
+                    "asset_type": classify_asset_type(info),
+                    "current_price": cp if cp and cp > 0 else info_cache[sym]["current_price"],
+                    "dividend_yield": div_yield,
+                    "dividend_rate": div_rate,
+                    "sector": info.get("sector"),
+                    "beta": info.get("beta"),
+                    "pe_ratio": info.get("trailingPE") or info.get("forwardPE"),
+                    "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
+                    "fifty_two_week_low": info.get("fiftyTwoWeekLow"),
                 }
-            except Exception:
-                pass
-            # Try full info for richer data but don't block on failure
-            try:
-                info = t.info
-                if info:
-                    cp = info.get("currentPrice") or info.get("regularMarketPrice") or info_cache.get(sym, {}).get("current_price", 0)
-                    div_yield = info.get("dividendYield") or info.get("yield") or 0
-                    if div_yield > 1:
-                        div_yield = div_yield / 100
-                    div_rate = info.get("dividendRate") or info.get("trailingAnnualDividendRate") or 0
-                    if div_yield > 0 and div_rate == 0 and cp > 0:
-                        div_rate = cp * div_yield
-                    elif div_rate > 0 and div_yield == 0 and cp > 0:
-                        div_yield = div_rate / cp
-                    info_cache[sym] = {
-                        "symbol": sym,
-                        "name": info.get("shortName") or info.get("longName") or sym,
-                        "asset_type": classify_asset_type(info),
-                        "current_price": cp or float(close_prices.get(sym, 0)),
-                        "dividend_yield": div_yield,
-                        "dividend_rate": div_rate,
-                        "sector": info.get("sector"),
-                        "beta": info.get("beta"),
-                        "pe_ratio": info.get("trailingPE") or info.get("forwardPE"),
-                        "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
-                        "fifty_two_week_low": info.get("fiftyTwoWeekLow"),
-                    }
-            except Exception:
-                pass
             _time.sleep(0.3)
         except Exception:
-            continue
+            pass  # Keep base info from batch download
 
-    # Build Holding objects
+    # Step 4: Build Holding objects
     holdings = []
     for item in items:
         sym = item["symbol"].upper()
