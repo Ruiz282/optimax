@@ -28,3 +28,4 @@ teaching_notes/
 # Misc
 *.log
 .env
+.streamlit/secrets.toml

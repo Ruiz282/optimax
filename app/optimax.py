@@ -42,6 +42,7 @@ from portfolio_manager import (
     refresh_watchlist_item,
     export_holdings_to_csv,
     import_holdings_from_csv,
+    create_holdings_batch,
     export_watchlist_to_csv,
     get_dividend_payment_history,
     get_monthly_dividend_totals,
@@ -832,9 +833,14 @@ if user_input and user_input.strip():
     pending = True
 
 if pending and st.session_state.sidebar_chat_messages and st.session_state.sidebar_chat_messages[-1]["role"] == "user":
-    groq_key = os.getenv("GROQ_API_KEY", "") or st.secrets.get("GROQ_API_KEY", "")
+    groq_key = os.getenv("GROQ_API_KEY", "")
+    if not groq_key:
+        try:
+            groq_key = st.secrets.get("GROQ_API_KEY", "")
+        except Exception:
+            groq_key = ""
     if not groq_key or groq_key == "your-api-key-here":
-        st.sidebar.error("Set your GROQ_API_KEY in the .env file.")
+        st.sidebar.warning("AI Advisor needs a Groq API key. Add GROQ_API_KEY to Streamlit Secrets (Settings > Secrets on Streamlit Cloud).")
     else:
         try:
             from groq import Groq
@@ -915,25 +921,56 @@ tab_dashboard, tab_portfolio, tab_valuation, tab_cash, tab_calendar, tab_options
 with tab_dashboard:
     st.subheader("Dashboard")
 
-    # Initialize holdings if needed
+    # Initialize holdings if needed — load demo portfolio on first visit
     if "holdings" not in st.session_state:
         st.session_state.holdings = []
     if "cash_balance" not in st.session_state:
         st.session_state.cash_balance = 0.0
 
-    if not st.session_state.holdings:
-        show_styled_empty_state(
-            icon="📊",
-            title="Welcome to RCR Portfolio Trackers",
-            message="Your dashboard will come alive once you add holdings.",
-            steps=[
-                "Go to the <b>Portfolio Manager</b> tab",
-                "Upload a CSV or add holdings manually",
-                "Return here to see analytics, dividends & performance",
-            ],
-        )
-        show_skeleton(num_cards=3, height=60)
+    if not st.session_state.holdings and not st.session_state.get("_demo_dismissed"):
+        # Load a demo portfolio so new users see a populated dashboard
+        if not st.session_state.get("_demo_loaded"):
+            DEMO_PORTFOLIO = [
+                {"symbol": "AAPL", "shares": 15, "cost": 175.00},
+                {"symbol": "MSFT", "shares": 10, "cost": 380.00},
+                {"symbol": "GOOGL", "shares": 8, "cost": 140.00},
+                {"symbol": "AMZN", "shares": 12, "cost": 178.00},
+                {"symbol": "VOO", "shares": 20, "cost": 440.00},
+                {"symbol": "SCHD", "shares": 30, "cost": 76.00},
+                {"symbol": "O", "shares": 25, "cost": 58.00},
+                {"symbol": "JPM", "shares": 10, "cost": 195.00},
+            ]
+            with st.spinner("Loading demo portfolio..."):
+                demo_holdings = create_holdings_batch(DEMO_PORTFOLIO)
+                if demo_holdings:
+                    st.session_state.holdings = demo_holdings
+                    st.session_state._demo_loaded = True
+                    st.rerun()
+        if not st.session_state.holdings:
+            show_styled_empty_state(
+                icon="📊",
+                title="Welcome to RCR Portfolio Trackers",
+                message="Your dashboard will come alive once you add holdings.",
+                steps=[
+                    "Go to the <b>Portfolio Manager</b> tab",
+                    "Upload a CSV or add holdings manually",
+                    "Return here to see analytics, dividends & performance",
+                ],
+            )
+            show_skeleton(num_cards=3, height=60)
     else:
+        # Show demo banner if viewing sample data
+        if st.session_state.get("_demo_loaded") and not st.session_state.get("_demo_dismissed"):
+            demo_col1, demo_col2 = st.columns([5, 1])
+            with demo_col1:
+                st.info("You're viewing a **demo portfolio**. Go to Portfolio Manager to import your own holdings.")
+            with demo_col2:
+                if st.button("Clear Demo", key="dismiss_demo"):
+                    st.session_state.holdings = []
+                    st.session_state._demo_dismissed = True
+                    st.session_state._demo_loaded = False
+                    st.rerun()
+
         # Calculate portfolio metrics
         with st.spinner("Loading dashboard..."):
             summary = calculate_portfolio_summary(st.session_state.holdings)
@@ -3096,26 +3133,19 @@ with tab_portfolio:
                     st.caption(f"...and {len(parsed) - 5} more")
 
             if st.button("Import All Holdings", key="do_import", type="primary"):
-                with st.spinner("Importing holdings..."):
+                with st.spinner(f"Importing {len(parsed)} holdings (batch mode)..."):
+                    holdings_list = create_holdings_batch(parsed)
                     success = 0
-                    for item in parsed:
-                        holding = create_holding(
-                            item["symbol"],
-                            item["shares"],
-                            item["cost"],
-                            item["purchase_date"],
-                            item.get("notes")
+                    for holding in holdings_list:
+                        existing_idx = next(
+                            (i for i, h in enumerate(st.session_state.holdings) if h.symbol == holding.symbol),
+                            None
                         )
-                        if holding:
-                            existing_idx = next(
-                                (i for i, h in enumerate(st.session_state.holdings) if h.symbol == item["symbol"]),
-                                None
-                            )
-                            if existing_idx is not None:
-                                st.session_state.holdings[existing_idx] = holding
-                            else:
-                                st.session_state.holdings.append(holding)
-                            success += 1
+                        if existing_idx is not None:
+                            st.session_state.holdings[existing_idx] = holding
+                        else:
+                            st.session_state.holdings.append(holding)
+                        success += 1
                     st.session_state.parsed_csv_holdings = None  # Clear cache
                     # Auto-save for logged-in users
                     if st.session_state.get("authenticated") and st.session_state.get("username"):

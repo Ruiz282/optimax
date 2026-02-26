@@ -407,6 +407,122 @@ def create_holding(symbol: str, shares: float, avg_cost: float, purchase_date: O
     )
 
 
+def create_holdings_batch(items: List[Dict]) -> List[Holding]:
+    """Create multiple holdings using a single batch yf.download for speed.
+    Each item: {symbol, shares, cost, purchase_date, notes}.
+    Much faster than calling create_holding() in a loop."""
+    import time as _time
+
+    if not items:
+        return []
+
+    symbols = list({item["symbol"].upper() for item in items})
+
+    # Batch download current prices (single API call)
+    try:
+        prices_df = yf.download(symbols, period="1d", progress=False)
+        if isinstance(prices_df.columns, pd.MultiIndex):
+            close_prices = prices_df["Close"].iloc[-1] if len(prices_df) > 0 else pd.Series()
+        else:
+            # Single ticker returns flat columns
+            close_prices = pd.Series({symbols[0]: prices_df["Close"].iloc[-1]}) if len(prices_df) > 0 else pd.Series()
+    except Exception:
+        close_prices = pd.Series()
+
+    # Fetch info for each ticker (needed for name, sector, etc.) with small delays
+    info_cache = {}
+    for sym in symbols:
+        try:
+            t = yf.Ticker(sym)
+            try:
+                fi = t.fast_info
+                price = fi.get("lastPrice") or float(close_prices.get(sym, 0))
+                info_cache[sym] = {
+                    "symbol": sym,
+                    "name": sym,
+                    "asset_type": "Stock",
+                    "current_price": price,
+                    "dividend_yield": 0,
+                    "dividend_rate": 0,
+                    "sector": None,
+                    "beta": None,
+                    "pe_ratio": None,
+                    "fifty_two_week_high": fi.get("yearHigh"),
+                    "fifty_two_week_low": fi.get("yearLow"),
+                }
+            except Exception:
+                pass
+            # Try full info for richer data but don't block on failure
+            try:
+                info = t.info
+                if info:
+                    cp = info.get("currentPrice") or info.get("regularMarketPrice") or info_cache.get(sym, {}).get("current_price", 0)
+                    div_yield = info.get("dividendYield") or info.get("yield") or 0
+                    if div_yield > 1:
+                        div_yield = div_yield / 100
+                    div_rate = info.get("dividendRate") or info.get("trailingAnnualDividendRate") or 0
+                    if div_yield > 0 and div_rate == 0 and cp > 0:
+                        div_rate = cp * div_yield
+                    elif div_rate > 0 and div_yield == 0 and cp > 0:
+                        div_yield = div_rate / cp
+                    info_cache[sym] = {
+                        "symbol": sym,
+                        "name": info.get("shortName") or info.get("longName") or sym,
+                        "asset_type": classify_asset_type(info),
+                        "current_price": cp or float(close_prices.get(sym, 0)),
+                        "dividend_yield": div_yield,
+                        "dividend_rate": div_rate,
+                        "sector": info.get("sector"),
+                        "beta": info.get("beta"),
+                        "pe_ratio": info.get("trailingPE") or info.get("forwardPE"),
+                        "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
+                        "fifty_two_week_low": info.get("fiftyTwoWeekLow"),
+                    }
+            except Exception:
+                pass
+            _time.sleep(0.3)
+        except Exception:
+            continue
+
+    # Build Holding objects
+    holdings = []
+    for item in items:
+        sym = item["symbol"].upper()
+        data = info_cache.get(sym)
+        if not data or not data.get("current_price"):
+            continue
+        shares = item["shares"]
+        avg_cost = item["cost"]
+        market_value = shares * data["current_price"]
+        total_cost = shares * avg_cost
+        unrealized_pnl = market_value - total_cost
+        unrealized_pnl_pct = (unrealized_pnl / total_cost * 100) if total_cost > 0 else 0
+        annual_income = shares * data["dividend_rate"]
+        holdings.append(Holding(
+            symbol=data["symbol"],
+            name=data["name"],
+            asset_type=data["asset_type"],
+            shares=shares,
+            avg_cost=avg_cost,
+            current_price=data["current_price"],
+            dividend_yield=data["dividend_yield"],
+            annual_dividend=data["dividend_rate"],
+            market_value=market_value,
+            total_cost=total_cost,
+            unrealized_pnl=unrealized_pnl,
+            unrealized_pnl_pct=unrealized_pnl_pct,
+            annual_income=annual_income,
+            sector=data["sector"],
+            beta=data["beta"],
+            pe_ratio=data["pe_ratio"],
+            fifty_two_week_high=data["fifty_two_week_high"],
+            fifty_two_week_low=data["fifty_two_week_low"],
+            purchase_date=item.get("purchase_date"),
+            notes=item.get("notes"),
+        ))
+    return holdings
+
+
 # ─────────────────────────────────────────────
 # CSV Export/Import Functions
 # ─────────────────────────────────────────────
