@@ -836,11 +836,16 @@ if pending and st.session_state.sidebar_chat_messages and st.session_state.sideb
     groq_key = os.getenv("GROQ_API_KEY", "")
     if not groq_key:
         try:
-            groq_key = st.secrets.get("GROQ_API_KEY", "")
-        except Exception:
+            groq_key = st.secrets["GROQ_API_KEY"]
+        except (KeyError, FileNotFoundError, Exception):
             groq_key = ""
     if not groq_key or groq_key == "your-api-key-here":
-        st.sidebar.warning("AI Advisor needs a Groq API key. Add GROQ_API_KEY to Streamlit Secrets (Settings > Secrets on Streamlit Cloud).")
+        st.sidebar.warning(
+            "AI Advisor requires a Groq API key.\n\n"
+            "**Streamlit Cloud:** Go to your app Settings → Secrets and add:\n"
+            "```\nGROQ_API_KEY = \"your-key-here\"\n```\n"
+            "**Local:** Add it to `app/.env`"
+        )
     else:
         try:
             from groq import Groq
@@ -3133,35 +3138,44 @@ with tab_portfolio:
                     st.caption(f"...and {len(parsed) - 5} more")
 
             if st.button("Import All Holdings", key="do_import", type="primary"):
-                with st.spinner(f"Importing {len(parsed)} holdings (batch mode)..."):
-                    holdings_list = create_holdings_batch(parsed)
-                    success = 0
-                    for holding in holdings_list:
-                        existing_idx = next(
-                            (i for i, h in enumerate(st.session_state.holdings) if h.symbol == holding.symbol),
-                            None
-                        )
-                        if existing_idx is not None:
-                            st.session_state.holdings[existing_idx] = holding
-                        else:
-                            st.session_state.holdings.append(holding)
-                        success += 1
-                    st.session_state.parsed_csv_holdings = None  # Clear cache
-                    # Auto-save for logged-in users
-                    if st.session_state.get("authenticated") and st.session_state.get("username"):
-                        try:
-                            save_user_data(
-                                st.session_state.username,
-                                st.session_state.holdings,
-                                st.session_state.get("cash_balance", 0),
-                                st.session_state.get("watchlist", [])
-                            )
-                            st.success(f"Imported {success} holdings and saved to your account!")
-                        except:
-                            st.success(f"Imported {success} holdings!")
+                progress_bar = st.progress(0, text="Fetching live prices...")
+                holdings_list = create_holdings_batch(parsed)
+                progress_bar.progress(80, text="Building portfolio...")
+                success = 0
+                # Clear demo data if present
+                if st.session_state.get("_demo_loaded"):
+                    st.session_state.holdings = []
+                    st.session_state._demo_loaded = False
+                    st.session_state._demo_dismissed = True
+                for holding in holdings_list:
+                    existing_idx = next(
+                        (i for i, h in enumerate(st.session_state.holdings) if h.symbol == holding.symbol),
+                        None
+                    )
+                    if existing_idx is not None:
+                        st.session_state.holdings[existing_idx] = holding
                     else:
-                        st.success(f"Imported {success} holdings!")
-                    st.rerun()
+                        st.session_state.holdings.append(holding)
+                    success += 1
+                progress_bar.progress(100, text="Done!")
+                st.session_state.parsed_csv_holdings = None  # Clear cache
+                failed = len(parsed) - success
+                # Auto-save for logged-in users
+                if st.session_state.get("authenticated") and st.session_state.get("username"):
+                    try:
+                        save_user_data(
+                            st.session_state.username,
+                            st.session_state.holdings,
+                            st.session_state.get("cash_balance", 0),
+                            st.session_state.get("watchlist", [])
+                        )
+                    except Exception:
+                        pass
+                if failed > 0:
+                    st.warning(f"Imported {success} holdings ({failed} failed — possibly invalid tickers or rate limited). Switch to the **Dashboard** tab to see your portfolio.")
+                else:
+                    st.success(f"Imported {success} holdings! Switch to the **Dashboard** tab to see your portfolio.")
+                st.rerun()
 
             if st.button("Clear", key="clear_csv"):
                 st.session_state.parsed_csv_holdings = None
