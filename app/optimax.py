@@ -66,6 +66,7 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 from dotenv import load_dotenv
 from pathlib import Path
+from fallback_cache import save_fallback, load_fallback
 
 # Load environment variables
 load_dotenv(Path(__file__).parent / ".env")
@@ -76,26 +77,54 @@ load_dotenv(Path(__file__).parent / ".env")
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _cached_entropy():
-    """Cache entropy computation for 1 hour to avoid yfinance rate limits."""
-    return compute_market_entropy(lookback_days=90)
+    """Cache entropy computation for 1 hour. Falls back to disk cache on failure."""
+    try:
+        result = compute_market_entropy(lookback_days=90)
+        if result:
+            save_fallback("entropy", result)
+        return result
+    except Exception:
+        data, _ = load_fallback("entropy", max_age_hours=24)
+        return data
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _cached_ticker_info(sym):
-    """Cache ticker info for 5 min to avoid rate limits."""
-    return get_ticker_info(sym)
+    """Cache ticker info for 5 min. Falls back to disk cache on failure."""
+    try:
+        result = get_ticker_info(sym)
+        if result and result.get("spot"):
+            save_fallback(f"ticker_{sym}", result)
+        return result
+    except Exception:
+        data, _ = load_fallback(f"ticker_{sym}", max_age_hours=4)
+        return data
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _cached_expirations(sym):
     """Cache expirations for 5 min."""
-    return get_expirations(sym)
+    try:
+        result = get_expirations(sym)
+        if result:
+            save_fallback(f"expirations_{sym}", result)
+        return result
+    except Exception:
+        data, _ = load_fallback(f"expirations_{sym}", max_age_hours=4)
+        return data or []
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _cached_iv_percentile(sym):
-    """Cache IV percentile for 5 min."""
-    return compute_iv_percentile(sym)
+    """Cache IV percentile for 5 min. Falls back to disk cache on failure."""
+    try:
+        result = compute_iv_percentile(sym)
+        if result:
+            save_fallback(f"iv_{sym}", result)
+        return result
+    except Exception:
+        data, _ = load_fallback(f"iv_{sym}", max_age_hours=4)
+        return data
 
 
 @st.cache_data(ttl=120, show_spinner=False)
@@ -345,6 +374,47 @@ def show_dollar_spinner(message: str = "Loading...") -> str:
     """
 
 
+def show_skeleton(num_cards: int = 3, height: int = 80):
+    """Show animated shimmer loading skeleton placeholders."""
+    st.markdown("""
+    <style>
+    @keyframes shimmer {
+        0% { background-position: -400px 0; }
+        100% { background-position: 400px 0; }
+    }
+    .skeleton-card {
+        background: linear-gradient(90deg, #1A1D26 25%, #2A2D36 50%, #1A1D26 75%);
+        background-size: 800px 100%;
+        animation: shimmer 1.5s ease-in-out infinite;
+        border-radius: 10px;
+        margin: 10px 0;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    for _ in range(num_cards):
+        st.markdown(f"<div class='skeleton-card' style='height:{height}px;'></div>",
+                    unsafe_allow_html=True)
+
+
+def show_styled_empty_state(icon: str, title: str, message: str, steps: list = None):
+    """Show a styled empty state card with optional steps."""
+    steps_html = ""
+    if steps:
+        steps_html = "<ol style='text-align:left;margin-top:12px;color:#B8B5FF;'>"
+        for step in steps:
+            steps_html += f"<li style='margin:6px 0;color:#ccc;'>{step}</li>"
+        steps_html += "</ol>"
+    st.markdown(f"""
+    <div style="text-align:center;padding:40px 20px;background:#1A1D26;border-radius:12px;
+                border:1px solid #2A2D36;margin:20px 0;">
+        <div style="font-size:48px;margin-bottom:12px;">{icon}</div>
+        <h3 style="color:#B8B5FF;margin-bottom:8px;">{title}</h3>
+        <p style="color:#888;font-size:1.05em;">{message}</p>
+        {steps_html}
+    </div>
+    """, unsafe_allow_html=True)
+
+
 def get_tax_loss_opportunities(holdings: list, tax_rate: float = 0.25) -> list:
     """Identify tax-loss harvesting opportunities."""
     opportunities = []
@@ -527,7 +597,7 @@ Powered by RCR Portfolio Trackers 📱
 
 st.set_page_config(
     page_title="RCR Portfolio Trackers",
-    page_icon="$",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -851,13 +921,17 @@ with tab_dashboard:
         st.session_state.cash_balance = 0.0
 
     if not st.session_state.holdings:
-        st.info("👋 Welcome to RCR Portfolio Trackers! Add holdings in the Portfolio Manager tab to see your dashboard.")
-        st.markdown("""
-        **Quick Start:**
-        1. Go to **Portfolio Manager** tab
-        2. Upload a CSV or add holdings manually
-        3. Return here to see your dashboard with analytics
-        """)
+        show_styled_empty_state(
+            icon="📊",
+            title="Welcome to RCR Portfolio Trackers",
+            message="Your dashboard will come alive once you add holdings.",
+            steps=[
+                "Go to the <b>Portfolio Manager</b> tab",
+                "Upload a CSV or add holdings manually",
+                "Return here to see analytics, dividends & performance",
+            ],
+        )
+        show_skeleton(num_cards=3, height=60)
     else:
         # Calculate portfolio metrics
         with st.spinner("Loading dashboard..."):
@@ -3683,9 +3757,15 @@ with tab_calendar:
     with st.spinner("Loading market news..."):
         try:
             market_news = fetch_market_news()
-        except Exception as e:
+            if market_news:
+                save_fallback("market_news", market_news)
+        except Exception:
             market_news = []
-            st.error(f"Error loading news: {str(e)}")
+        if not market_news:
+            cached_news, age_min = load_fallback("market_news", max_age_hours=6)
+            if cached_news:
+                market_news = cached_news
+                st.warning(f"Showing cached news from ~{age_min} minutes ago (live fetch failed).")
 
     if market_news:
         for news in market_news[:12]:
@@ -3707,7 +3787,11 @@ with tab_calendar:
                 unsafe_allow_html=True
             )
     elif not market_news:
-        st.info("No market news available at this time. Try refreshing the page.")
+        show_styled_empty_state(
+            icon="📰",
+            title="No Market News Available",
+            message="News could not be loaded right now. This may be due to rate limiting — try refreshing in a minute.",
+        )
 
     st.markdown("---")
 
@@ -4276,7 +4360,12 @@ with tab_options:
 
     symbol = st.session_state.symbol
     if not info or not expirations:
-        st.warning(f"Enter a valid ticker symbol above to see options data. Current: **{symbol}**")
+        show_styled_empty_state(
+            icon="⚡",
+            title="Options Trading",
+            message="Enter a valid ticker symbol above to load the options chain, IV analysis, and strategy recommendations.",
+        )
+        show_skeleton(num_cards=4, height=50)
     elif info and symbol:
         # Load IV and Entropy lazily — only when Options tab is rendered
         with st.spinner("Loading IV & market data..."):
@@ -4353,7 +4442,11 @@ with tab_options:
     st.markdown("---")
 
     if not expirations:
-        st.warning("No options expirations available. Enter a valid ticker symbol in Options Trading settings above.")
+        show_styled_empty_state(
+            icon="📅",
+            title="No Expirations Available",
+            message="Could not load options expirations. Check the ticker symbol or try again in a moment.",
+        )
         selected_exp = None
         selected_idx = None
     else:
@@ -4882,6 +4975,10 @@ with tab_valuation:
             quarterly_financials = val_data["quarterly_financials"]
             quarterly_balance_sheet = val_data["quarterly_balance_sheet"]
             quarterly_cashflow = val_data["quarterly_cashflow"]
+
+            # Save to fallback cache on success
+            if val_info.get('currentPrice'):
+                save_fallback(f"valuation_{val_symbol}", val_data)
 
             loading_placeholder.empty()
 
@@ -5707,7 +5804,19 @@ with tab_valuation:
 
         except Exception as e:
             loading_placeholder.empty()
-            st.error(f"Error analyzing {val_symbol}: {str(e)}")
+            # Try fallback cache before showing error
+            cached_val, age_min = load_fallback(f"valuation_{val_symbol}", max_age_hours=24)
+            if cached_val:
+                st.warning(f"Live data unavailable — showing cached analysis from ~{age_min} minutes ago.")
+                val_info = cached_val["info"]
+                financials = cached_val["financials"]
+                balance_sheet = cached_val["balance_sheet"]
+                cash_flow = cached_val["cashflow"]
+                quarterly_financials = cached_val["quarterly_financials"]
+                quarterly_balance_sheet = cached_val["quarterly_balance_sheet"]
+                quarterly_cashflow = cached_val["quarterly_cashflow"]
+            else:
+                st.error(f"Error analyzing {val_symbol}: {str(e)}")
 
     elif not run_valuation:
         st.markdown("---")
