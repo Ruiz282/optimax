@@ -785,7 +785,8 @@ risk_free_rate = st.session_state.risk_free_rate
 # ─────────────────────────────────────────────
 
 st.sidebar.markdown(
-    "<h2 style='text-align:center;margin-bottom:0;'>RCR Portfolio Trackers</h2>"
+    "<h2 style='text-align:center;margin-bottom:0;font-family:\"Georgia\",\"Times New Roman\",serif;"
+    "font-style:italic;color:#B8B5FF;'>RCR Portfolio</h2>"
     "<p style='text-align:center;color:#888;font-size:0.85em;margin-top:2px;'>AI Investment Advisor</p>",
     unsafe_allow_html=True,
 )
@@ -877,14 +878,14 @@ if symbol:
         info = None
         expirations = []
 
+    st.markdown(
+        "<h1 style='font-family:\"Georgia\",\"Times New Roman\",serif;font-style:italic;"
+        "color:#B8B5FF;margin-bottom:0;'>RCR Portfolio</h1>",
+        unsafe_allow_html=True,
+    )
+
     if info:
         spot = info["spot"]
-
-        col_title, col_price = st.columns([3, 1])
-        with col_title:
-            st.title(f"{info['name']} ({symbol})")
-        with col_price:
-            st.metric("Spot Price", f"${spot:,.2f}")
 
         # IV and Entropy are loaded lazily when the Options/Entropy tab renders
         # to minimize upfront API calls and avoid rate limits
