@@ -1,5 +1,5 @@
 """
-OptiMax — Options Strategy Recommender + Portfolio Manager
+RCR Portfolio Trackers — Options Strategy Recommender + Portfolio Manager
 All Sections: Data Engine + Strategy Recommender + Entropy Signals + Trade Cards + Portfolio
 
 Run with:  streamlit run app/optimax.py
@@ -516,7 +516,7 @@ Dividend Yield: {summary.get('dividend_yield', 0):.2f}%
     snapshot += """
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
-Powered by OptiMax 📱
+Powered by RCR Portfolio Trackers 📱
 """
     return snapshot
 
@@ -526,7 +526,7 @@ Powered by OptiMax 📱
 # ─────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="OptiMax",
+    page_title="RCR Portfolio Trackers",
     page_icon="$",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -715,7 +715,7 @@ risk_free_rate = st.session_state.risk_free_rate
 # ─────────────────────────────────────────────
 
 st.sidebar.markdown(
-    "<h2 style='text-align:center;margin-bottom:0;'>OptiMax</h2>"
+    "<h2 style='text-align:center;margin-bottom:0;'>RCR Portfolio Trackers</h2>"
     "<p style='text-align:center;color:#888;font-size:0.85em;margin-top:2px;'>AI Investment Advisor</p>",
     unsafe_allow_html=True,
 )
@@ -729,7 +729,7 @@ with chat_container:
     if not st.session_state.sidebar_chat_messages:
         st.markdown(
             '<div style="text-align:center;padding:25px 15px;color:#888;">'
-            '<h4 style="color:#B8B5FF;margin-bottom:6px;font-weight:600;">Welcome to OptiMax AI</h4>'
+            '<h4 style="color:#B8B5FF;margin-bottom:6px;font-weight:600;">Welcome to RCR AI</h4>'
             '<p>Ask me anything about investing, trading strategies, portfolio ideas, or market analysis.</p></div>',
             unsafe_allow_html=True,
         )
@@ -772,7 +772,7 @@ if pending and st.session_state.sidebar_chat_messages and st.session_state.sideb
                        f"risk tolerance: {risk_tol_key}, portfolio: ${portfolio_value:,}, "
                        f"max risk/trade: {risk_per_trade*100:.1f}%.")
             system_prompt = (
-                f"You are an expert AI investment advisor in OptiMax. "
+                f"You are an expert AI investment advisor in RCR Portfolio Trackers. "
                 f"Help with investment strategies, stock analysis, options, portfolio diversification. "
                 f"Be concise (sidebar). Use bullet points. Keep under 200 words. "
                 f"Context: {context} "
@@ -851,7 +851,7 @@ with tab_dashboard:
         st.session_state.cash_balance = 0.0
 
     if not st.session_state.holdings:
-        st.info("👋 Welcome to OptiMax! Add holdings in the Portfolio Manager tab to see your dashboard.")
+        st.info("👋 Welcome to RCR Portfolio Trackers! Add holdings in the Portfolio Manager tab to see your dashboard.")
         st.markdown("""
         **Quick Start:**
         1. Go to **Portfolio Manager** tab
@@ -3328,7 +3328,7 @@ Portfolio Stats:
 📈 {total_pnl_pct:+.1f}% all-time return
 📊 {num_holdings} holdings
 
-#OptiMax #Investing
+#RCRPortfolioTrackers #Investing
                 """
 
                 st.download_button(
@@ -4236,7 +4236,14 @@ with tab_calendar:
 # ═════════════════════════════════════════════
 
 with tab_options:
-    st.subheader("Options Trading")
+    if info and spot:
+        opt_title_col, opt_price_col = st.columns([3, 1])
+        with opt_title_col:
+            st.subheader(f"Options Trading — {info['name']} ({symbol})")
+        with opt_price_col:
+            st.metric("Spot Price", f"${spot:,.2f}")
+    else:
+        st.subheader("Options Trading")
 
     # ── Options Settings (moved from sidebar) ──
     with st.expander("**Settings** — Ticker, Market View & Position Sizing", expanded=True):
@@ -5837,7 +5844,7 @@ The entropy signal adds a *structural* dimension that VIX alone cannot capture. 
 
 st.markdown("---")
 st.caption(
-    "OptiMax v2.0 | Data: yfinance (15-min delayed) | "
+    "RCR Portfolio Trackers v2.0 | Data: yfinance (15-min delayed) | "
     "Greeks: Black-Scholes (European approx.) | "
     "Entropy: Sector ETF-based Shannon entropy | "
     "Portfolio: Live prices & dividend yields | "
